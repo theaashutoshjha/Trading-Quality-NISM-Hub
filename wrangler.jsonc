@@ -1,0 +1,32 @@
+﻿{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fundsindia-learning-hub",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-12",
+  "routes": [
+    { "pattern": "learning-hub.fingtaj.online", "custom_domain": true },
+    { "pattern": "www.learning-hub.fingtaj.online", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // The Worker decides who may see what (admin bundle is gated by session).
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "fundsindia-hub",
+      "database_id": "6fb47d1a-5c74-4a45-9bf9-376e5d018fbb",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    // Keep this unlisted URL private; it is the Admin Portal login path.
+    "ADMIN_PATH": "/staff-setup-27c46f564011466288812abef083aeb9",
+    // Set to "0" only for local http development (see .dev.vars).
+    "COOKIE_SECURE": "1"
+  },
+  "observability": { "enabled": true }
+}
