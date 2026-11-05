@@ -4,8 +4,8 @@ Internal learning platform for FundsIndia employees — FundsIndia Academy video
 
 | | URL | Who |
 |---|---|---|
-| **Learner Portal** | `https://learning-hub.fingtaj.online/` or `https://www.learning-hub.fingtaj.online/` | Employees — each has a private dashboard, progress, resume points, quiz history, certificates |
-| **Admin Portal** | `https://learning-hub.fingtaj.online/<ADMIN_PATH>` | Admins & trainers (password + optional authenticator-app 2FA) |
+| **Learner Portal** | `https://lmslearning.online/` or `https://www.lmslearning.online/` | Employees — each has a private dashboard, progress, resume points, quiz history, certificates |
+| **Admin Portal** | `https://lmslearning.online/<ADMIN_PATH>` | Admins & trainers (password + optional authenticator-app 2FA) |
 
 Both hostnames use HTTPS; HTTP requests are redirected to HTTPS.
 
@@ -51,14 +51,13 @@ npm run seed:build                    # re-checks every video can be embedded, t
 ```bash
 npm install
 npx wrangler login
-npx wrangler d1 create fundsindia-hub          # paste database_id into wrangler.jsonc
 npm run db:migrate:remote
 npm run seed:build && npm run db:seed:remote
 npx wrangler secret put SETUP_TOKEN            # long random value
 # edit wrangler.jsonc -> "ADMIN_PATH": "/choose-a-secret-path"
 npm run deploy
 ```
-The configured custom domains are `learning-hub.fingtaj.online` and `www.learning-hub.fingtaj.online`; the domain must be an active Cloudflare zone in the deploying account. Open `https://learning-hub.fingtaj.online/<ADMIN_PATH>` → create the first admin → *My security* → enable 2-step verification → *Users & access* → add learners (single or CSV).
+The configured custom domains are `lmslearning.online` and `www.lmslearning.online`; the domain must be an active Cloudflare zone in the deploying account. Both hosts redirect HTTP to HTTPS. Open `https://lmslearning.online/<ADMIN_PATH>` → create the first admin → *My security* → enable 2-step verification → *Users & access* → add learners (single or CSV).
 
 ## Run locally
 ```bash

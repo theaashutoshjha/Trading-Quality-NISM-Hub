@@ -4,8 +4,8 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-12",
   "routes": [
-    { "pattern": "learning-hub.fingtaj.online", "custom_domain": true },
-    { "pattern": "www.learning-hub.fingtaj.online", "custom_domain": true }
+    { "pattern": "lmslearning.online", "custom_domain": true },
+    { "pattern": "www.lmslearning.online", "custom_domain": true }
   ],
   "assets": {
     "directory": "./dist",
@@ -18,7 +18,7 @@
     {
       "binding": "DB",
       "database_name": "fundsindia-hub",
-      "database_id": "6fb47d1a-5c74-4a45-9bf9-376e5d018fbb",
+      "database_id": "15c842cb-354d-4452-8331-ae93c227e4cb",
       "migrations_dir": "migrations"
     }
   ],
