@@ -63,7 +63,11 @@ const q = (v) => (v === null || v === undefined ? 'NULL' : typeof v === 'number'
 // UPSERT, never REPLACE: REPLACE deletes the old row first, which would cascade-delete learners'
 // progress, resume points and attempts that point at it. An upsert updates content in place.
 const PK = { path_items: ['path_id', 'lesson_id'] };
+const made = { lessons: new Set(), modules: new Set(), quizzes: new Set() };
+const qCount = {};
 const insert = (table, row) => {
+  if (made[table]) made[table].add(row.id);
+  if (table === 'questions') qCount[row.quiz_id] = (qCount[row.quiz_id] || 0) + 1;
   const cols = Object.keys(row);
   const pk = PK[table] || ['id'];
   const set = cols.filter((c) => !pk.includes(c)).map((c) => `${c}=excluded.${c}`).join(',');
@@ -221,7 +225,7 @@ for (const c of COURSES) {
   };
   const addQuiz = (mid, title, questions, opts = {}) => {
     const id = `${cid}-z${quizSort}`;
-    stmts.push(insert('quizzes', { id, course_id: cid, module_id: mid, title, minutes: opts.minutes ?? 15, pass_pct: opts.pass ?? 60, negative: opts.negative ?? 0, is_exam: opts.exam ? 1 : 0, published: 1, sort: quizSort++ }));
+    stmts.push(insert('quizzes', { id, course_id: cid, module_id: mid, title, minutes: opts.minutes ?? 15, pass_pct: opts.pass ?? 60, negative: opts.negative ?? 0, is_exam: opts.exam ? 1 : 0, mock: 0, published: 1, sort: quizSort++ }));
     const n = addQuestions(id, questions);
     stat.quizzes++;
     stat.questions += n;
@@ -271,9 +275,14 @@ for (const c of COURSES) {
       if (pq.length >= 2) addQuiz(mid, `Chapter ${ch.chapterNumber} practice`, pq, { minutes: Math.max(10, pq.length * 1.5 | 0), pass: 60, negative: 0 });
     }
     const mock = addModule('Mock exams');
-    const pool = S.pool || [];
+    // Final assessment (issues the internal certificate): drawn from the series' full question bank, 50 random questions per attempt.
+    let pool = S.pool || [];
+    if (rule) {
+      const seenTxt = new Set(); pool = [];
+      for (const t of D.buildMockTests(cid)) for (const x of t) if (!seenTxt.has(x.question)) { seenTxt.add(x.question); pool.push(x); }
+    }
     const neg = rule ? rule.negative : /zero|none|no negative/i.test(wb?.examPattern?.negativeMarking || '') ? 0 : 0.25;
-    if (pool.length) addQuiz(mock, `${c.code} - Full mock test`, pool, { minutes: 120, pass: rule?.pass || wb?.examPattern?.passingPercentage || 60, negative: neg, exam: true });
+    if (pool.length) addQuiz(mock, rule ? `${c.code} - Final assessment (certificate)` : `${c.code} - Full mock test`, pool, { minutes: rule ? 60 : 120, pass: rule?.pass || wb?.examPattern?.passingPercentage || 60, negative: neg, exam: true });
   } else if (c.src === 'product') {
     for (const m of D.PRODUCT_SCHOOL_MODULES) {
       const mid = addModule(m.name);
@@ -307,7 +316,7 @@ for (const c of COURSES) {
     const mm = addModule(`Mock tests (${tests.length} x ${D.QUESTIONS_PER_TEST} questions)`);
     tests.forEach((qs, i) => {
       const id = `${cid}-z${quizSort}`;
-      stmts.push(insert('quizzes', { id, course_id: cid, module_id: mm, title: `Mock Test ${i + 1}`, minutes: rule.minutes, pass_pct: rule.pass, negative: rule.negative, is_exam: 0, mock: 1, published: 1, sort: quizSort++ }));
+      stmts.push(insert('quizzes', { id, course_id: cid, module_id: mm, title: `NISM ${rule.code} - Mock Test ${i + 1}`, minutes: rule.minutes, pass_pct: rule.pass, negative: rule.negative, is_exam: 0, mock: 1, published: 1, sort: quizSort++ }));
       const n = addQuestions(id, qs);
       stat.quizzes++; stat.questions += n;
     });
@@ -349,6 +358,23 @@ PATHS.forEach((p, i) => {
   pathCounts.push({ path: p.title, steps: ids.length });
 });
 console.table(pathCounts);
+
+// ---------- clean up seeded rows that earlier seeds created but this build no longer produces ----------
+// Only ids that follow the seed's own naming (<course>-l*, <course>-v-*, <course>-z*, <course>-m*) are touched, so
+// lessons, quizzes and modules added by admins in the Admin Portal are never removed.
+const inList = (s) => [...s].map(q).join(',');
+for (const c of COURSES) {
+  const own = (set, prefixes) => [...set].filter((id) => prefixes.some((p) => id.startsWith(`${c.id}-${p}`)));
+  const L = own(made.lessons, ['l', 'v-']), M = own(made.modules, ['m']), Z = own(made.quizzes, ['z']);
+  stmts.push(`DELETE FROM lessons WHERE course_id=${q(c.id)} AND (id LIKE ${q(c.id + '-l%')} OR id LIKE ${q(c.id + '-v-%')}) AND id NOT IN (${L.length ? inList(L) : "''"});`);
+  stmts.push(`DELETE FROM quizzes WHERE course_id=${q(c.id)} AND id LIKE ${q(c.id + '-z%')} AND id NOT IN (${Z.length ? inList(Z) : "''"});`);
+  stmts.push(`DELETE FROM modules WHERE course_id=${q(c.id)} AND id LIKE ${q(c.id + '-m%')} AND id NOT IN (${M.length ? inList(M) : "''"});`);
+  for (const z of Z) stmts.push(`DELETE FROM questions WHERE quiz_id=${q(z)} AND sort >= ${qCount[z] || 0};`);
+}
+
+// ---------- remove videos that cannot be played (deleted, private, or embedding disabled) ----------
+const dead = Object.entries(embedCache).filter(([, ok]) => ok === false).map(([id]) => id);
+for (let i = 0; i < dead.length; i += 50) stmts.push(`DELETE FROM lessons WHERE kind='video' AND video_id IN (${dead.slice(i, i + 50).map(q).join(',')});`);
 
 // ---------- news seed ----------
 const news = [

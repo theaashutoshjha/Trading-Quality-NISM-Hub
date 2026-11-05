@@ -175,3 +175,4 @@ img[alt='FundsIndia'] { mix-blend-mode: multiply; }
 
 .qnav button.flag { box-shadow: inset 0 0 0 2px #f5a524, var(--raise-s); }
 .player .poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; pointer-events: none; background: #000; }
+@media (max-width: 560px) { .player .ctl { flex-wrap: wrap; gap: 4px; justify-content: space-between; } .player .ctl input[type=range] { order: 9; flex: 1 1 100%; } .player .ctl .t { font-size: .75rem; } .player { padding: 8px 8px 0; } .player .frame { border-radius: 14px; } }

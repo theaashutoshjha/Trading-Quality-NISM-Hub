@@ -4,8 +4,8 @@ Internal learning platform for FundsIndia employees — FundsIndia Academy video
 
 | | URL | Who |
 |---|---|---|
-| **Learner Portal** | `https://lmslearning.online/` or `https://www.lmslearning.online/` | Employees — each has a private dashboard, progress, resume points, quiz history, certificates |
-| **Admin Portal** | `https://lmslearning.online/<ADMIN_PATH>` | Admins & trainers (password + optional authenticator-app 2FA) |
+| **Learner Portal** | `https://learning-hub.fingtaj.online/` or `https://www.learning-hub.fingtaj.online/` | Employees — each has a private dashboard, progress, resume points, quiz history, certificates |
+| **Admin Portal** | `https://learning-hub.fingtaj.online/<ADMIN_PATH>` | Admins & trainers (password + optional authenticator-app 2FA) |
 
 Both hostnames use HTTPS; HTTP requests are redirected to HTTPS.
 
@@ -51,13 +51,14 @@ npm run seed:build                    # re-checks every video can be embedded, t
 ```bash
 npm install
 npx wrangler login
+npx wrangler d1 create fundsindia-hub          # paste database_id into wrangler.jsonc
 npm run db:migrate:remote
 npm run seed:build && npm run db:seed:remote
 npx wrangler secret put SETUP_TOKEN            # long random value
 # edit wrangler.jsonc -> "ADMIN_PATH": "/choose-a-secret-path"
 npm run deploy
 ```
-The configured custom domains are `lmslearning.online` and `www.lmslearning.online`; the domain must be an active Cloudflare zone in the deploying account. Both hosts redirect HTTP to HTTPS. Open `https://lmslearning.online/<ADMIN_PATH>` → create the first admin → *My security* → enable 2-step verification → *Users & access* → add learners (single or CSV).
+The configured custom domains are `learning-hub.fingtaj.online` and `www.learning-hub.fingtaj.online`; the domain must be an active Cloudflare zone in the deploying account. Open `https://learning-hub.fingtaj.online/<ADMIN_PATH>` → create the first admin → *My security* → enable 2-step verification → *Users & access* → add learners (single or CSV).
 
 ## Run locally
 ```bash
@@ -77,3 +78,10 @@ Videos play in the portal's own player (custom controls, speed, resume, end card
 - [ ] Spot-check videos and re-run the catalog refresh periodically — videos can be removed by their owners.
 - [ ] Zoho / Tata Tele notes are generic: replace with your SOPs. Tata Tele has only official product explainers (few recent videos).
 - [ ] The internal certificate is not an NISM/SEBI certificate.
+
+## NISM mock tests, workbook reader and video checks (added)
+* **Mock tests** - 11 NISM series x 20 tests x 100 questions (`seed/mocktests/`). Pass mark and negative marking follow each series (see `MOCK_RULES`). Mock tests never issue certificates; each series also has a 50-question **Final assessment** that does. Written questions need subject-expert review; many non-V-A questions are calculated numericals.
+* **NISM V-A** is built from the September 2026 workbook summary (`seed/data/nismVADeck.json`) and the N V Finance playlist, chapter by chapter.
+* **Workbook reader** - drop official PDFs into `public/workbooks/NISM-Series-<code>.pdf`; the course page's Workbook tab opens them as a page-turning book.
+* **Video checks** - `seed/tools/embed-check/` tests every video in a real browser. Videos that cannot be embedded are recorded in `seed/data/embed-ok.json` and removed by `npm run seed:build` + seed apply. If a learner sees "can't be played", the player shows the reason (blocked network/ad-blocker, owner disabled embedding, removed) with Retry and Watch-on-YouTube.
+* Re-seeding now also removes seeded lessons/quizzes/modules that no longer exist (admin-created content is never touched). After pulling this update run `npm run db:migrate:remote` before `npm run deploy`.

@@ -47,6 +47,9 @@ export function Player({ videoId, title, start = 0, onProgress, onEnded, nextLab
   const [playing, setPlaying] = useState(false);
   const [ended, setEnded] = useState(false);
   const [error, setError] = useState(false);
+  const [errCode, setErrCode] = useState('');
+  const [attempt, setAttempt] = useState(0);
+  const readyRef = useRef(false);
   const [cur, setCur] = useState(0);
   const [dur, setDur] = useState(0);
   const [rate, setRate] = useState(1);
@@ -57,6 +60,11 @@ export function Player({ videoId, title, start = 0, onProgress, onEnded, nextLab
   const last = useRef(0);
   const cb = useRef({ onProgress, onEnded });
   cb.current = { onProgress, onEnded };
+  readyRef.current = ready;
+  const why = errCode === '100' || errCode === '105' ? 'This video has been removed or made private by its owner.'
+    : errCode === '101' || errCode === '150' || errCode === '153' ? 'The owner of this video does not allow it to be played on other websites.'
+    : errCode === 'blocked' || errCode === 'timeout' ? 'The video service could not be reached. Check your internet connection, and make sure a firewall, VPN or ad-blocker is not blocking youtube.com and youtube-nocookie.com.'
+    : 'The video could not be played right now.';
 
   const report = useCallback(() => {
     const p = yt.current;
@@ -67,7 +75,7 @@ export function Player({ videoId, title, start = 0, onProgress, onEnded, nextLab
 
   useEffect(() => {
     let dead = false;
-    setReady(false); setEnded(false); setError(false); setPlaying(false); setStarted(false); setPoster('maxresdefault'); setCur(start || 0); setDur(0);
+    setReady(false); setEnded(false); setError(false); setErrCode(''); setPlaying(false); setStarted(false); setPoster('maxresdefault'); setCur(start || 0); setDur(0);
     loadApi().then((YT) => {
       if (dead || !host.current) return;
       const el = document.createElement('div');
@@ -87,16 +95,19 @@ export function Player({ videoId, title, start = 0, onProgress, onEnded, nextLab
             if (e.data === S.PAUSED) report();
             if (e.data === S.PLAYING) { setEnded(false); setStarted(true); setDur(e.target.getDuration() || 0); }
           },
-          onError: () => !dead && setError(true),
+          onError: (e: any) => { if (!dead) { setErrCode(String(e?.data ?? 'unknown')); setError(true); } },
         },
       });
-    }).catch(() => !dead && setError(true));
+    }).catch(() => { if (!dead) { setErrCode('blocked'); setError(true); } });
+    // If the player never becomes ready (blocked network, ad-blocker, firewall) tell the learner instead of spinning forever.
+    const watchdog = window.setTimeout(() => { if (!dead && !readyRef.current) { setErrCode('timeout'); setError(true); } }, 20000);
     return () => {
       dead = true;
+      window.clearTimeout(watchdog);
       try { report(); yt.current?.destroy?.(); } catch { /* ignore */ }
       yt.current = null;
     };
-  }, [videoId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [videoId, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // poll position while playing
   useEffect(() => {
@@ -127,12 +138,23 @@ export function Player({ videoId, title, start = 0, onProgress, onEnded, nextLab
       onKeyDown={(e) => { if (e.key === ' ' || e.key === 'k') { e.preventDefault(); toggle(); } if (e.key === 'ArrowRight') skip(10); if (e.key === 'ArrowLeft') skip(-10); if (e.key === 'f') full(); }}>
       <div className="frame">
         <div ref={host} aria-hidden />
-        {!started && !ended && !error && <img className="poster" alt="" src={`https://i.ytimg.com/vi/${videoId}/${poster}.jpg`} onError={() => setPoster('mqdefault')} />}
+        {!started && !ended && !error && <img className="poster" alt="" src={`https://i.ytimg.com/vi/${videoId}/${poster}.jpg`} onError={() => setPoster('mqdefault')} onLoad={(e) => { if (poster === 'maxresdefault' && (e.currentTarget as HTMLImageElement).naturalWidth <= 200) setPoster('mqdefault'); }} />}
         <div className="wm">FundsIndia Learning Hub</div>
         <div className="shield" onClick={toggle} onContextMenu={(e) => e.preventDefault()} />
         {ready && !playing && !ended && !error && <button className="bigplay" aria-hidden tabIndex={-1}>▶</button>}
         {!ready && !error && <div className="center" style={{ position: 'absolute', inset: 0, color: '#fff', zIndex: 3 }}><div className="spin" /> Loading video…</div>}
-        {error && <div className="endcard"><div style={{ fontSize: 34 }}>⚠️</div><b>This video is currently unavailable.</b><span style={{ opacity: .75 }}>It may have been removed. Please tell your administrator.</span></div>}
+        {error && (
+          <div className="endcard">
+            <div style={{ fontSize: 34 }}>⚠️</div><b>This video can't be played here.</b>
+            <span style={{ opacity: .8, maxWidth: 520 }}>{why}</span>
+            <div className="row wrap" style={{ justifyContent: 'center' }}>
+              <button className="btn" onClick={() => setAttempt((n) => n + 1)}>↻ Retry</button>
+              <a className="btn" href={`https://www.youtube.com/watch?v=${videoId}`} target="_blank" rel="noopener noreferrer">Watch on YouTube ↗</a>
+              {onNext && <button className="btn primary" onClick={onNext}>{nextLabel || 'Next lesson'} →</button>}
+            </div>
+            {errCode && <span style={{ opacity: .45, fontSize: '.7rem' }}>Error code: {errCode}</span>}
+          </div>
+        )}
         {ended && !error && (
           <div className="endcard">
             <div style={{ fontSize: 34 }}>✅</div><b style={{ fontSize: '1.15rem' }}>Lesson complete</b>
