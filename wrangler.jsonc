@@ -18,7 +18,7 @@
     {
       "binding": "DB",
       "database_name": "fundsindia-hub",
-      "database_id": "6fb47d1a-5c74-4a45-9bf9-376e5d018fbb",
+      "database_id": "15c842cb-354d-4452-8331-ae93c227e4cb",
       "migrations_dir": "migrations"
     }
   ],
