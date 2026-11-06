@@ -4,8 +4,8 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-12",
   "routes": [
-    { "pattern": "learning-hub.fingtaj.online", "custom_domain": true, "zone_name": "fingtaj.online" },
-    { "pattern": "www.learning-hub.fingtaj.online", "custom_domain": true, "zone_name": "fingtaj.online" }
+    { "pattern": "learning-hub.fingtaj.online", "custom_domain": true },
+    { "pattern": "www.learning-hub.fingtaj.online", "custom_domain": true }
   ],
   "assets": {
     "directory": "./dist",
