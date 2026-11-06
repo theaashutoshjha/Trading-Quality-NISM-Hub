@@ -39,7 +39,7 @@ export default {
     const url = new URL(req.url);
     if (
       url.protocol === 'http:' &&
-      ['lmslearning.online', 'www.lmslearning.online'].includes(url.hostname)
+      ['fundsindia.lmslearning.online', 'www.fundsindia.lmslearning.online'].includes(url.hostname)
     ) {
       url.protocol = 'https:';
       return Response.redirect(url.toString(), 308);

@@ -4,8 +4,8 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-12",
   "routes": [
-    { "pattern": "lmslearning.online", "custom_domain": true, "zone_name": "lmslearning.online" },
-    { "pattern": "www.lmslearning.online", "custom_domain": true, "zone_name": "lmslearning.online" }
+    { "pattern": "fundsindia.lmslearning.online", "custom_domain": true, "zone_name": "lmslearning.online" },
+    { "pattern": "www.fundsindia.lmslearning.online", "custom_domain": true, "zone_name": "lmslearning.online" }
   ],
   "assets": {
     "directory": "./dist",
