@@ -70,7 +70,7 @@ npm run dev            # http://127.0.0.1:8787
 Windows: keep the project in a **short path** (e.g. `C:\fihub`) — long folder paths break local D1. `scripts/smoke.ps1` and `scripts/smoke2.ps1` are end-to-end tests against `npm run dev`.
 
 ## Video player note
-Videos play in the portal's own player (custom controls, speed, resume, end card, no outbound links). The stream is delivered by an embedded player that is kept non-interactive; its own small overlays (title strip at start, corner logo) are drawn inside that embed and are intentionally **not** masked, because hiding a video platform's branding is against its terms. Presenter names are credited on each lesson. To get a fully white-labelled player, host **your own** videos (e.g. Cloudflare Stream or R2) — appropriate for FundsIndia-owned content; other creators' videos need their permission.
+Videos play in YouTube's embedded player on the lesson page, with YouTube's native controls and attribution visible. The portal also provides progress tracking, resume, playback speed, and lesson navigation. A video owner may disable embedding, in which case that video cannot be played inside the hub; use only videos that permit embedding or host an authorized copy (e.g. FundsIndia-owned videos on Cloudflare Stream or R2). Do not mask YouTube branding or attribution.
 
 ## Before going live
 - [ ] Change `ADMIN_PATH`, set `SETUP_TOKEN`, create admin, enable 2FA.

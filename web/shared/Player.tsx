@@ -55,14 +55,13 @@ export function Player({ videoId, title, start = 0, onProgress, onEnded, nextLab
   const [rate, setRate] = useState(1);
   const [muted, setMuted] = useState(false);
   const [seeking, setSeeking] = useState(false);
-  const [started, setStarted] = useState(false);
-  const [poster, setPoster] = useState('maxresdefault');
   const last = useRef(0);
   const cb = useRef({ onProgress, onEnded });
   cb.current = { onProgress, onEnded };
   readyRef.current = ready;
   const why = errCode === '100' || errCode === '105' ? 'This video has been removed or made private by its owner.'
-    : errCode === '101' || errCode === '150' || errCode === '153' ? 'The owner of this video does not allow it to be played on other websites.'
+    : errCode === '101' || errCode === '150' ? 'The owner of this video does not allow it to be played on other websites.'
+    : errCode === '153' ? 'YouTube could not verify the embedding page. Reload the lesson and check whether browser privacy settings or extensions are blocking YouTube.'
     : errCode === 'blocked' || errCode === 'timeout' ? 'The video service could not be reached. Check your internet connection, and make sure a firewall, VPN or ad-blocker is not blocking youtube.com and youtube-nocookie.com.'
     : 'The video could not be played right now.';
 
@@ -75,7 +74,7 @@ export function Player({ videoId, title, start = 0, onProgress, onEnded, nextLab
 
   useEffect(() => {
     let dead = false;
-    setReady(false); setEnded(false); setError(false); setErrCode(''); setPlaying(false); setStarted(false); setPoster('maxresdefault'); setCur(start || 0); setDur(0);
+    setReady(false); setEnded(false); setError(false); setErrCode(''); setPlaying(false); setCur(start || 0); setDur(0);
     loadApi().then((YT) => {
       if (dead || !host.current) return;
       const el = document.createElement('div');
@@ -84,7 +83,7 @@ export function Player({ videoId, title, start = 0, onProgress, onEnded, nextLab
       yt.current = new YT.Player(el, {
         host: 'https://www.youtube-nocookie.com',
         videoId,
-        playerVars: { controls: 0, disablekb: 1, fs: 0, rel: 0, modestbranding: 1, iv_load_policy: 3, playsinline: 1, cc_load_policy: 0, start: Math.floor(start), origin: location.origin },
+        playerVars: { controls: 1, disablekb: 0, fs: 1, rel: 0, iv_load_policy: 3, playsinline: 1, cc_load_policy: 0, start: Math.floor(start), origin: location.origin },
         events: {
           onReady: (e: any) => { if (dead) return; setReady(true); setDur(e.target.getDuration() || 0); },
           onStateChange: (e: any) => {
@@ -93,7 +92,7 @@ export function Player({ videoId, title, start = 0, onProgress, onEnded, nextLab
             setPlaying(e.data === S.PLAYING || e.data === S.BUFFERING);
             if (e.data === S.ENDED) { setEnded(true); report(); cb.current.onEnded?.(); }
             if (e.data === S.PAUSED) report();
-            if (e.data === S.PLAYING) { setEnded(false); setStarted(true); setDur(e.target.getDuration() || 0); }
+            if (e.data === S.PLAYING) { setEnded(false); setDur(e.target.getDuration() || 0); }
           },
           onError: (e: any) => { if (!dead) { setErrCode(String(e?.data ?? 'unknown')); setError(true); } },
         },
@@ -137,34 +136,30 @@ export function Player({ videoId, title, start = 0, onProgress, onEnded, nextLab
     <div className="player" ref={wrap} tabIndex={0} aria-label={`Video: ${title}`}
       onKeyDown={(e) => { if (e.key === ' ' || e.key === 'k') { e.preventDefault(); toggle(); } if (e.key === 'ArrowRight') skip(10); if (e.key === 'ArrowLeft') skip(-10); if (e.key === 'f') full(); }}>
       <div className="frame">
-        <div ref={host} aria-hidden />
-        {!started && !ended && !error && <img className="poster" alt="" src={`https://i.ytimg.com/vi/${videoId}/${poster}.jpg`} onError={() => setPoster('mqdefault')} onLoad={(e) => { if (poster === 'maxresdefault' && (e.currentTarget as HTMLImageElement).naturalWidth <= 200) setPoster('mqdefault'); }} />}
-        <div className="wm">FundsIndia Learning Hub</div>
-        <div className="shield" onClick={toggle} onContextMenu={(e) => e.preventDefault()} />
-        {ready && !playing && !ended && !error && <button className="bigplay" aria-hidden tabIndex={-1}>▶</button>}
+        <div ref={host} />
         {!ready && !error && <div className="center" style={{ position: 'absolute', inset: 0, color: '#fff', zIndex: 3 }}><div className="spin" /> Loading video…</div>}
-        {error && (
-          <div className="endcard">
-            <div style={{ fontSize: 34 }}>⚠️</div><b>This video can't be played here.</b>
-            <span style={{ opacity: .8, maxWidth: 520 }}>{why}</span>
-            <div className="row wrap" style={{ justifyContent: 'center' }}>
-              <button className="btn" onClick={() => setAttempt((n) => n + 1)}>↻ Retry</button>
-              <a className="btn" href={`https://www.youtube.com/watch?v=${videoId}`} target="_blank" rel="noopener noreferrer">Watch on YouTube ↗</a>
-              {onNext && <button className="btn primary" onClick={onNext}>{nextLabel || 'Next lesson'} →</button>}
-            </div>
-            {errCode && <span style={{ opacity: .45, fontSize: '.7rem' }}>Error code: {errCode}</span>}
-          </div>
-        )}
-        {ended && !error && (
-          <div className="endcard">
-            <div style={{ fontSize: 34 }}>✅</div><b style={{ fontSize: '1.15rem' }}>Lesson complete</b>
-            <div className="row wrap" style={{ justifyContent: 'center' }}>
-              <button className="btn" onClick={() => { seek(0); yt.current?.playVideo(); }}>↺ Replay</button>
-              {onNext && <button className="btn primary" onClick={onNext}>{nextLabel || 'Next lesson'} →</button>}
-            </div>
-          </div>
-        )}
       </div>
+      {error && (
+        <div className="playerNotice" role="alert">
+          <b>This video can't be played here.</b>
+          <span>{why}</span>
+          <div className="row wrap" style={{ justifyContent: 'center' }}>
+            <button className="btn" onClick={() => setAttempt((n) => n + 1)}>↻ Retry</button>
+            <a className="btn" href={`https://www.youtube.com/watch?v=${videoId}`} target="_blank" rel="noopener noreferrer">Watch on YouTube ↗</a>
+            {onNext && <button className="btn primary" onClick={onNext}>{nextLabel || 'Next lesson'} →</button>}
+          </div>
+          {errCode && <span className="small">Error code: {errCode}</span>}
+        </div>
+      )}
+      {ended && !error && (
+        <div className="playerNotice">
+          <b>Lesson complete</b>
+          <div className="row wrap" style={{ justifyContent: 'center' }}>
+            <button className="btn" onClick={() => { seek(0); yt.current?.playVideo(); }}>↺ Replay</button>
+            {onNext && <button className="btn primary" onClick={onNext}>{nextLabel || 'Next lesson'} →</button>}
+          </div>
+        </div>
+      )}
       <div className="ctl">
         <button onClick={toggle} aria-label={playing ? 'Pause' : 'Play'}>{playing ? '⏸' : '▶'}</button>
         <button onClick={() => skip(-10)} aria-label="Back 10 seconds" title="Back 10s">⟲10</button>
