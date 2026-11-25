@@ -14,6 +14,7 @@ export interface User {
   name: string;
   emp_id: string | null;
   department: string | null;
+  team: string | null;
   role: 'learner' | 'trainer' | 'admin';
   status: string;
   must_change: number;
@@ -82,7 +83,7 @@ export async function sessionUser(env: Env, req: Request, kind: Kind): Promise<U
   if (!token || token.length < 30) return null;
   const hash = await sha256Hex(token);
   const row = await env.DB.prepare(
-    `SELECT u.id,u.email,u.name,u.emp_id,u.department,u.role,u.status,u.must_change,u.totp_enabled
+    `SELECT u.id,u.email,u.name,u.emp_id,u.department,u.team,u.role,u.status,u.must_change,u.totp_enabled
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND s.kind = ? AND s.expires_at > ? AND u.status = 'active'`,
   )

@@ -59,6 +59,10 @@ export function Overview() {
 }
 
 /* ---------- Users ---------- */
+export const TEAMS = ['MF Onboarding', 'MF Digital', 'MF Silver', 'MF Gold', 'MF Platinum', 'Equity Onboarding', 'Equity Regular', 'Customer Support'];
+const TeamSelect = ({ value, onChange }: { value: string; onChange: (e: any) => void }) => (
+  <select value={value} onChange={onChange}><option value="">— no team (cannot sign in) —</option>{TEAMS.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+);
 export function UsersPage() {
   const r = useLoad(() => api.get('/api/admin/users'));
   const [q, setQ] = useState('');
@@ -79,12 +83,12 @@ export function UsersPage() {
       {toast}
       <div className="row between wrap"><h1>Users & access</h1><div className="row"><button className="btn primary" onClick={() => setModal('add')}>＋ Add user</button><button className="btn" onClick={() => setModal('bulk')}>⬆ Bulk add (CSV)</button></div></div>
       <div className="alert ok">🔒 Only administrators can create or delete accounts — there is no self-registration. A learner's progress, resume points, quiz history and certificates are stored against their account and are kept every time they sign out and back in. Prefer <b>Suspend</b> (Edit → Status) over Delete: deleting an account permanently erases that person's learning data.</div>
-      <input placeholder="Search name, e-mail, employee ID…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search users" />
+      <input placeholder="Search name, e-mail, user ID…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search users" />
       {r.loading ? <Spinner /> : r.error ? <ErrorBox error={r.error} /> : (
         <div className="card tscroll"><table className="t"><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Progress</th><th>Last login</th><th></th></tr></thead><tbody>
           {users.map((u: any) => (
             <tr key={u.id}>
-              <td><b>{u.name}</b><div className="muted small">{u.email}{u.emp_id ? ` · ${u.emp_id}` : ''}{u.department ? ` · ${u.department}` : ''}</div></td>
+              <td><b>{u.name}</b><div className="muted small">{u.email}{u.emp_id ? ` · ID ${u.emp_id}` : ''}{u.department ? ` · ${u.department}` : ''}</div>{u.role === 'learner' && (u.team ? <span className="badge" style={{ marginTop: 4 }}>{u.team}</span> : <span className="badge r" style={{ marginTop: 4 }}>No team</span>)}</td>
               <td><span className={'badge ' + (u.role === 'admin' ? 'r' : u.role === 'trainer' ? 'w' : 'm')}>{u.role}</span>{u.totp_enabled ? <span className="badge g" title="2-step on" style={{ marginLeft: 4 }}>2FA</span> : null}</td>
               <td><span className={'badge ' + (u.status === 'active' ? 'g' : u.status === 'pending' ? 'w' : 'r')}>{u.status}</span></td>
               <td className="small">{u.lessons} lessons · {u.avg_score ?? '—'}% avg · {u.certs} cert</td>
@@ -125,7 +129,7 @@ function UserProgress({ u, onClose }: { u: any; onClose: () => void }) {
   );
 }
 function AddUser({ onClose, onDone }: { onClose: () => void; onDone: (c: any[]) => void }) {
-  const [f, setF] = useState({ name: '', email: '', empId: '', department: '', role: 'learner' });
+  const [f, setF] = useState({ name: '', email: '', empId: '', department: '', team: '', role: 'learner' });
   const [err, setErr] = useState('');
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
   async function go(e: FormEvent) { e.preventDefault(); try { const r = await api.post('/api/admin/users', f); if (!r.created.length) throw new Error('Could not create (duplicate or invalid e-mail).'); onDone(r.created); } catch (x: any) { setErr(x.message); } }
@@ -133,7 +137,8 @@ function AddUser({ onClose, onDone }: { onClose: () => void; onDone: (c: any[]) 
     <Modal title="Add user" onClose={onClose}><form onSubmit={go}>
       <Field label="Full name"><input value={f.name} onChange={set('name')} required /></Field>
       <Field label="E-mail"><input type="email" value={f.email} onChange={set('email')} required /></Field>
-      <div className="grid g2"><Field label="Employee ID"><input value={f.empId} onChange={set('empId')} /></Field><Field label="Department"><input value={f.department} onChange={set('department')} /></Field></div>
+      <div className="grid g2"><Field label="User ID (used to sign in)"><input value={f.empId} onChange={set('empId')} placeholder="e.g. FI1023" /></Field><Field label="Department"><input value={f.department} onChange={set('department')} /></Field></div>
+      <Field label="Team (decides what they can access)"><TeamSelect value={f.team} onChange={set('team')} /></Field>
       <Field label="Role"><select value={f.role} onChange={set('role')}><option value="learner">Learner</option><option value="trainer">Trainer (can edit content)</option><option value="admin">Admin (full access)</option></select></Field>
       {err && <div className="alert err">{err}</div>}<button className="btn primary" style={{ marginTop: 16 }}>Create & generate password</button>
     </form></Modal>
@@ -143,26 +148,27 @@ function BulkUsers({ onClose, onDone }: { onClose: () => void; onDone: (c: any[]
   const [txt, setTxt] = useState('');
   const [err, setErr] = useState('');
   async function go() {
-    const users = txt.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const [email, name, empId, department] = l.split(/[,\t]/).map((x) => x.trim()); return { email, name, empId, department, role: 'learner' }; });
+    const users = txt.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const [email, name, empId, department, team] = l.split(/[,\t]/).map((x) => x.trim()); return { email, name, empId, department, team, role: 'learner' }; });
     try { const r = await api.post('/api/admin/users', { users }); if (r.skipped.length) alert('Skipped (duplicate/invalid): ' + r.skipped.join(', ')); onDone(r.created); } catch (x: any) { setErr(x.message); }
   }
   return (
     <Modal title="Bulk add learners" onClose={onClose}>
-      <p className="muted small">One per line: <code>email, full name, employee id, department</code> (last two optional). Up to 500 lines.</p>
-      <textarea rows={10} value={txt} onChange={(e) => setTxt(e.target.value)} placeholder="asha@company.com, Asha Rao, E1023, Sales" />
+      <p className="muted small">One per line: <code>email, full name, user id, department, team</code> (user id, department and team are optional; team must be exactly one of: {TEAMS.join(' / ')}). Up to 500 lines.</p>
+      <textarea rows={10} value={txt} onChange={(e) => setTxt(e.target.value)} placeholder="asha@company.com, Asha Rao, FI1023, Sales, MF Digital" />
       {err && <div className="alert err">{err}</div>}<button className="btn primary" style={{ marginTop: 12 }} onClick={go}>Create accounts</button>
     </Modal>
   );
 }
 function EditUser({ u, self, onClose, onDone }: { u: any; self: boolean; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ name: u.name, empId: u.emp_id || '', department: u.department || '', role: u.role, status: u.status });
+  const [f, setF] = useState({ name: u.name, empId: u.emp_id || '', department: u.department || '', team: u.team || '', role: u.role, status: u.status });
   const [err, setErr] = useState('');
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
   async function go(e: FormEvent) { e.preventDefault(); try { await api.put('/api/admin/users/' + u.id, f); onDone(); } catch (x: any) { setErr(x.message); } }
   return (
     <Modal title={'Edit ' + u.email} onClose={onClose}><form onSubmit={go}>
       <Field label="Name"><input value={f.name} onChange={set('name')} required /></Field>
-      <div className="grid g2"><Field label="Employee ID"><input value={f.empId} onChange={set('empId')} /></Field><Field label="Department"><input value={f.department} onChange={set('department')} /></Field></div>
+      <div className="grid g2"><Field label="User ID (used to sign in)"><input value={f.empId} onChange={set('empId')} /></Field><Field label="Department"><input value={f.department} onChange={set('department')} /></Field></div>
+      <Field label="Team (decides what they can access)"><TeamSelect value={f.team} onChange={set('team')} /></Field>
       <div className="grid g2"><Field label="Role"><select value={f.role} onChange={set('role')} disabled={self}><option value="learner">Learner</option><option value="trainer">Trainer</option><option value="admin">Admin</option></select></Field>
         <Field label="Status"><select value={f.status} onChange={set('status')} disabled={self}><option value="active">Active</option><option value="pending">Pending</option><option value="suspended">Suspended</option></select></Field></div>
       {err && <div className="alert err">{err}</div>}<button className="btn primary" style={{ marginTop: 16 }}>Save</button>
@@ -171,6 +177,41 @@ function EditUser({ u, self, onClose, onDone }: { u: any; self: boolean; onClose
 }
 
 /* ---------- Courses ---------- */
+/* ---------- Team access ---------- */
+export function TeamAccessPage() {
+  const r = useLoad(() => api.get('/api/admin/teams'));
+  const [team, setTeam] = useState(TEAMS[0]);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [msg, setMsg] = useState('');
+  useEffect(() => { if (r.data) setSel(new Set(r.data.teams.find((t: any) => t.name === team)?.courses || [])); }, [r.data, team]);
+  if (r.loading) return <Spinner />;
+  if (r.error) return <ErrorBox error={r.error} retry={r.reload} />;
+  const cats = Array.from(new Set<string>(r.data.courses.map((c: any) => c.category)));
+  const toggle = (id: string) => { const n = new Set(sel); if (n.has(id)) n.delete(id); else n.add(id); setSel(n); };
+  async function save() { try { await api.put('/api/admin/teams/' + encodeURIComponent(team), { courses: [...sel] }); setMsg('Saved ✓ — applies immediately'); r.reload(); setTimeout(() => setMsg(''), 2500); } catch (e: any) { alert(e.message); } }
+  const cur = r.data.teams.find((t: any) => t.name === team);
+  return (
+    <div className="stack">
+      <div><h1>Team access</h1><p className="muted" style={{ margin: 0 }}>Choose which courses each team can see. Learners sign in with their User ID, password and team; they only ever see the courses ticked here. Admins and trainers see everything.</p></div>
+      {r.data.unassigned > 0 && <div className="alert warn">{r.data.unassigned} learner account(s) have no team yet and cannot sign in. Assign teams under <b>Users & access</b>.</div>}
+      <div className="row wrap">{TEAMS.map((t) => { const x = r.data.teams.find((y: any) => y.name === t); return <button key={t} className={'chip' + (team === t ? ' on' : '')} onClick={() => setTeam(t)}>{t} <span className="muted small">({x?.learners || 0})</span></button>; })}</div>
+      <div className="card">
+        <div className="row between wrap"><h2 style={{ margin: 0 }}>{team}</h2><span className="small muted">{cur?.learners || 0} learner(s) · {sel.size} course(s) selected</span></div>
+        {cats.map((cat) => (
+          <div key={cat} style={{ marginTop: 14 }}>
+            <div className="small muted" style={{ fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.06em' }}>{CATEGORIES[cat] || cat}</div>
+            {r.data.courses.filter((c: any) => c.category === cat).map((c: any) => (
+              <label key={c.id} className="lesson-row" style={{ cursor: 'pointer' }}>
+                <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} style={{ width: 18, height: 18, flex: 'none' }} />
+                <span className="grow"><b>{c.title}</b> <span className="muted small">{c.code}</span></span>
+              </label>))}
+          </div>))}
+        <div className="row" style={{ marginTop: 18 }}><button className="btn primary" onClick={save}>Save access for {team}</button><button className="btn" onClick={() => setSel(new Set(r.data.courses.map((c: any) => c.id)))}>Select all</button><button className="btn" onClick={() => setSel(new Set())}>Clear</button>{msg && <span className="badge g">{msg}</span>}</div>
+      </div>
+    </div>
+  );
+}
+
 export function CoursesPage() {
   const r = useLoad(() => api.get('/api/admin/courses'));
   const [show, setShow] = useState(false);

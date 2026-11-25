@@ -28,11 +28,11 @@ $r = Call GET '/staff-console' $null $adm; Show 'admin console (signed in)' $r 2
 $r = Call GET '/api/admin/stats' $null $adm; Show 'admin stats' $r 200
 $r = Call GET '/api/courses' $null $adm; Show 'admin cookie on learner API (must fail)' $r 401
 
-$r = Call POST '/api/admin/users' @{ name = 'Asha Rao'; email = 'asha@fundsindia.test'; empId = 'E1'; role = 'learner' } $adm; Show 'create learner' $r 200
+$r = Call POST '/api/admin/users' @{ name = 'Asha Rao'; email = 'asha@fundsindia.test'; empId = 'E1'; role = 'learner'; team = 'MF Silver' } $adm; Show 'create learner' $r 200
 $tmp = $r.body.created[0].password
 $ln = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-$r = Call POST '/api/auth/login' @{ email = 'asha@fundsindia.test'; password = 'bad' } $ln; Show 'learner wrong pw' $r 401
-$r = Call POST '/api/auth/login' @{ email = 'asha@fundsindia.test'; password = $tmp } $ln; Show 'learner login (temp pw)' $r 200; "   mustChange=" + $r.body.mustChange
+$r = Call POST '/api/auth/login' @{ email = 'asha@fundsindia.test'; password = 'bad'; team = 'MF Silver' } $ln; Show 'learner wrong pw' $r 401
+$r = Call POST '/api/auth/login' @{ email = 'asha@fundsindia.test'; password = $tmp; team = 'MF Silver' } $ln; Show 'learner login (temp pw)' $r 200; "   mustChange=" + $r.body.mustChange
 $r = Call POST '/api/auth/password' @{ current = $tmp; next = 'Learner#Pass2026' } $ln; Show 'learner change pw' $r 200
 $r = Call GET '/api/admin/stats' $null $ln; Show 'learner on admin API (must fail)' $r 401
 $r = Call GET '/api/courses' $null $ln; Show 'courses' $r 200; "   courses=" + $r.body.courses.Count
@@ -50,7 +50,7 @@ $r = Call GET '/api/feeds' $null $ln; Show 'live feeds' $r 200; "   items=" + $r
 
 # brute force lockout
 $t = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-1..6 | ForEach-Object { $r = Call POST '/api/auth/login' @{ email = 'victim@fundsindia.test'; password = "bad$_" } $t }
+1..6 | ForEach-Object { $r = Call POST '/api/auth/login' @{ email = 'victim@fundsindia.test'; password = "bad$_"; team = 'MF Silver' } $t }
 Show 'lockout after repeated failures' $r 429
 
 # CSRF-ish: cross-origin write

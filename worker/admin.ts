@@ -2,6 +2,7 @@
 import { hashPassword, passwordProblem, randomToken } from './security';
 import type { Route } from './router';
 import { fetchPlaylist, oembed } from './youtube';
+import { TEAMS, isTeam } from './teams';
 
 const A = 'admin' as const;
 const OWNER = 'admin-only' as const;
@@ -79,7 +80,7 @@ export const adminRoutes: Route[] = [
   // ---------- Users (admin only) ----------
   ['GET', '/api/admin/users', OWNER, async (c) => {
     const r = await c.env.DB.prepare(
-      `SELECT u.id,u.email,u.name,u.emp_id,u.department,u.role,u.status,u.must_change,u.totp_enabled,u.created_at,u.last_login,
+      `SELECT u.id,u.email,u.name,u.emp_id,u.department,u.team,u.role,u.status,u.must_change,u.totp_enabled,u.created_at,u.last_login,
               (SELECT COUNT(*) FROM progress p WHERE p.user_id=u.id) lessons,
               (SELECT ROUND(AVG(pct),1) FROM attempts a WHERE a.user_id=u.id) avg_score,
               (SELECT COUNT(*) FROM certificates ce WHERE ce.user_id=u.id AND ce.revoked=0) certs
@@ -98,8 +99,8 @@ export const adminRoutes: Route[] = [
       if (role === 'admin' && c.user!.role !== 'admin') continue;
       const temp = randomToken(9) + 'Aa1'; // shown once to the admin, learner must change on first login
       try {
-        await c.env.DB.prepare(`INSERT INTO users (id,email,name,emp_id,department,role,status,pw_hash,must_change) VALUES (?,?,?,?,?,?,'active',?,1)`)
-          .bind(newId(12), email, name, str(r.empId, 30) || null, str(r.department, 60) || null, role, await hashPassword(temp)).run();
+        await c.env.DB.prepare(`INSERT INTO users (id,email,name,emp_id,department,team,role,status,pw_hash,must_change) VALUES (?,?,?,?,?,?,?,'active',?,1)`)
+          .bind(newId(12), email, name, str(r.empId, 30) || null, str(r.department, 60) || null, isTeam(r.team) ? r.team : null, role, await hashPassword(temp)).run();
         created.push({ email, password: temp });
       } catch { skipped.push(email); }
     }
@@ -110,14 +111,17 @@ export const adminRoutes: Route[] = [
     const b = await c.body();
     const id = c.params[0];
     if (id === c.user!.id && (b.status && b.status !== 'active' || b.role && b.role !== c.user!.role)) fail(400, 'You cannot demote or disable your own account.');
-    const cur = await c.env.DB.prepare(`SELECT role,status FROM users WHERE id=?`).bind(id).first<any>();
+    const cur = await c.env.DB.prepare(`SELECT role,status,team FROM users WHERE id=?`).bind(id).first<any>();
     if (!cur) fail(404, 'User not found.');
     const role = ['learner', 'trainer', 'admin'].includes(b.role) ? b.role : cur.role;
     const status = ['active', 'pending', 'suspended'].includes(b.status) ? b.status : cur.status;
-    await c.env.DB.prepare(`UPDATE users SET name=COALESCE(NULLIF(?,''),name), emp_id=?, department=?, role=?, status=? WHERE id=?`)
-      .bind(str(b.name, 80), str(b.empId, 30) || null, str(b.department, 60) || null, role, status, id).run();
+    const team = b.team === undefined ? cur.team : isTeam(b.team) ? b.team : null;
+    try {
+      await c.env.DB.prepare(`UPDATE users SET name=COALESCE(NULLIF(?,''),name), emp_id=?, department=?, team=?, role=?, status=? WHERE id=?`)
+        .bind(str(b.name, 80), str(b.empId, 30) || null, str(b.department, 60) || null, team, role, status, id).run();
+    } catch { fail(409, 'That User ID is already used by another account.'); }
     if (status !== 'active' || role !== cur.role) await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(id).run();
-    await audit(c.env, c.user!.email, 'user_updated', `${id} role=${role} status=${status}`, c.ip);
+    await audit(c.env, c.user!.email, 'user_updated', `${id} role=${role} status=${status} team=${team || '-'}`, c.ip);
     return json({ ok: true });
   }],
   ['POST', '/api/admin/users/:id/reset', OWNER, async (c) => {
@@ -131,6 +135,35 @@ export const adminRoutes: Route[] = [
     if (c.params[0] === c.user!.id) fail(400, 'You cannot delete your own account.');
     await c.env.DB.prepare(`DELETE FROM users WHERE id=?`).bind(c.params[0]).run();
     await audit(c.env, c.user!.email, 'user_deleted', c.params[0], c.ip);
+    return json({ ok: true });
+  }],
+  // ---------- Teams: which courses each team can open ----------
+  ['GET', '/api/admin/teams', OWNER, async (c) => {
+    const db = c.env.DB;
+    const [rows, courses, counts] = await Promise.all([
+      db.prepare(`SELECT team, course_id FROM team_access`).all<{ team: string; course_id: string }>(),
+      db.prepare(`SELECT id, code, title, category FROM courses ORDER BY sort, title`).all(),
+      db.prepare(`SELECT team, COUNT(*) n FROM users WHERE role='learner' AND team IS NOT NULL GROUP BY team`).all<{ team: string; n: number }>(),
+    ]);
+    const n = new Map(counts.results.map((x) => [x.team, x.n]));
+    const unassigned = await db.prepare(`SELECT COUNT(*) n FROM users WHERE role='learner' AND team IS NULL`).first<{ n: number }>();
+    return json({
+      teams: TEAMS.map((t) => ({ name: t, learners: n.get(t) || 0, courses: rows.results.filter((r) => r.team === t).map((r) => r.course_id) })),
+      courses: courses.results,
+      unassigned: unassigned?.n || 0,
+    });
+  }],
+  ['PUT', '/api/admin/teams/:team', OWNER, async (c) => {
+    const team = c.params[0];
+    if (!isTeam(team)) fail(404, 'Unknown team.');
+    const b = await c.body();
+    const ids: string[] = Array.isArray(b.courses) ? [...new Set<string>(b.courses.map(String))].slice(0, 200) : [];
+    const db = c.env.DB;
+    await db.batch([
+      db.prepare(`DELETE FROM team_access WHERE team=?`).bind(team),
+      ...ids.map((id) => db.prepare(`INSERT OR IGNORE INTO team_access (team,course_id) SELECT ?, id FROM courses WHERE id=?`).bind(team, id)),
+    ]);
+    await audit(c.env, c.user!.email, 'team_access_updated', `${team}: ${ids.length} courses`, c.ip);
     return json({ ok: true });
   }],
   ['GET', '/api/admin/audit', OWNER, async (c) => {

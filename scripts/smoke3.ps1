@@ -17,10 +17,10 @@ $A = Jar 'ashwini'; $null = Req POST '/api/admin/login' @{ email = 'ashwini.prab
 Check 'self-signup endpoint is gone' ((Req POST '/api/auth/signup' @{ email = 'x@fundsindia.com'; name = 'X'; password = 'Aa1aaaaaaaaa' } (Jar 'anon')).code -eq 404)
 
 # 3. admin creates a learner
-$u = Req POST '/api/admin/users' @{ name = 'Persist Test'; email = 'persist.test@fundsindia.com'; role = 'learner' } $A
+$u = Req POST '/api/admin/users' @{ name = 'Persist Test'; email = 'persist.test@fundsindia.com'; role = 'learner'; team = 'MF Silver' } $A
 Check 'admin creates learner' ($u.code -eq 200 -and $u.body.created.Count -eq 1)
 $tmp = $u.body.created[0].password; $L = Jar 'learner'
-$null = Req POST '/api/auth/login' @{ email = 'persist.test@fundsindia.com'; password = $tmp } $L
+$null = Req POST '/api/auth/login' @{ email = 'persist.test@fundsindia.com'; password = $tmp; team = 'MF Silver' } $L
 $null = Req POST '/api/auth/password' @{ current = $tmp; next = 'Persist#Test2026' } $L
 
 # 4. learner cannot create/delete accounts; trainer cannot either
@@ -44,7 +44,7 @@ $before = (Req GET '/api/dashboard' $null $L).body
 # 6. sign out, sign back in, data is the same
 $null = Req POST '/api/auth/logout' @{} $L
 Check 'signed out (session dead)' ((Req GET '/api/auth/me' $null $L).code -eq 401)
-$L2 = Jar 'learner2'; $r = Req POST '/api/auth/login' @{ email = 'persist.test@fundsindia.com'; password = 'Persist#Test2026' } $L2
+$L2 = Jar 'learner2'; $r = Req POST '/api/auth/login' @{ email = 'persist.test@fundsindia.com'; password = 'Persist#Test2026'; team = 'MF Silver' } $L2
 Check 'sign back in' ($r.code -eq 200 -and -not $r.body.mustChange)
 $after = (Req GET '/api/dashboard' $null $L2).body
 Check 'lessons completed unchanged' ($after.stats.lessons -eq $before.stats.lessons -and $after.stats.lessons -ge 1) "($($after.stats.lessons))"
@@ -53,14 +53,14 @@ Check 'resume point unchanged' ((Req GET "/api/lessons/$lesson2" $null $L2).body
 Check 'attempt history unchanged' ((Req GET '/api/attempts' $null $L2).body.attempts.Count -ge 1)
 
 # 7. another learner never sees this data
-$oth = Req POST '/api/admin/users' @{ name = 'Other Person'; email = 'other.person@fundsindia.com' } $A; $OJ = Jar 'other'
-$null = Req POST '/api/auth/login' @{ email = 'other.person@fundsindia.com'; password = $oth.body.created[0].password } $OJ
+$oth = Req POST '/api/admin/users' @{ name = 'Other Person'; email = 'other.person@fundsindia.com'; team = 'MF Silver' } $A; $OJ = Jar 'other'
+$null = Req POST '/api/auth/login' @{ email = 'other.person@fundsindia.com'; password = $oth.body.created[0].password; team = 'MF Silver' } $OJ
 Check 'other learner has own empty dashboard' ((Req GET '/api/dashboard' $null $OJ).body.stats.lessons -eq 0)
 
 # 8. admin password reset / suspend keep the data; delete requires admin and removes it
 $null = Req POST "/api/admin/users/$uid2/reset" @{} $A
 $null = Req PUT "/api/admin/users/$uid2" @{ name = 'Persist Test'; status = 'suspended'; role = 'learner' } $A
-Check 'suspended learner cannot sign in' ((Req POST '/api/auth/login' @{ email = 'persist.test@fundsindia.com'; password = 'Persist#Test2026' } (Jar 'x')).code -in 401, 403)
+Check 'suspended learner cannot sign in' ((Req POST '/api/auth/login' @{ email = 'persist.test@fundsindia.com'; password = 'Persist#Test2026'; team = 'MF Silver' } (Jar 'x')).code -in 401, 403)
 $null = Req PUT "/api/admin/users/$uid2" @{ name = 'Persist Test'; status = 'active'; role = 'learner' } $A
 $prog = (Req GET "/api/admin/users/$uid2/progress" $null $A).body
 Check 'data still there after reset + suspend + reactivate' ($prog.courses.Count -ge 1 -and $prog.attempts.Count -ge 1)

@@ -12,9 +12,9 @@ export const NISM_LINKS = [
 ];
 
 export const COURSES = [
-  // ---- FundsIndia's own academy (videos come from seed/data/fi-channel.json via FI_CURATED) ----
+  // ---- FundsIndia's own academy (every channel video, grouped by seed/fi-academy.mjs) ----
   { id: 'fi-academy', src: null, code: 'FI ACADEMY', title: 'FundsIndia Academy', subtitle: 'Investing, SIPs, bonds, stocks & markets', category: 'academy', level: 'All employees', popular: 1,
-    description: 'Educational videos created by FundsIndia — investor mindset, SIPs and mutual funds, bonds and SIFs, stocks and IPOs, and market literacy. Only current, education-focused videos are included.', series: [], links: [] },
+    description: 'Every public video from the FundsIndia YouTube channel, grouped by topic: investor mindset, getting started on the platform, SIPs and mutual funds, bonds and SIFs, stocks and IPOs, NPS, market views, fund-manager talks, media appearances, customer voices and brand films.', series: [], links: [] },
 
   // ---- NISM ----
   { id: 'nism-5a', src: 'va', code: 'NISM V-A', title: 'NISM Series V-A', subtitle: 'Mutual Fund Distributors Certification', category: 'nism', level: 'Mandatory (AMFI ARN)', popular: 1,
@@ -35,13 +35,13 @@ export const COURSES = [
     series: [S('PLMdK_Oe95V-Emz2u-MKMqi308DUFKaFw2', 'SORM 2026', 'Tech Courses', 'English')], links: NISM_LINKS },
   { id: 'nism-8', src: 'viii', code: 'NISM VIII', title: 'NISM Series VIII', subtitle: 'Equity Derivatives', category: 'nism', level: 'Advanced',
     description: 'Futures, options, payoffs, Greeks, strategies, clearing and settlement and risk management.',
-    series: [S('PLmFN7_8sAtp-sbsYOJQT1CtkFa7Y71b99', 'Equity Derivatives - all chapters', 'N V Finance', 'English')], links: NISM_LINKS },
+    series: [S('PLmFN7_8sAtp-sbsYOJQT1CtkFa7Y71b99', 'Equity Derivatives - complete syllabus (N V Finance)', 'N V Finance', 'English', { noAgeFilter: true })], links: NISM_LINKS },
   { id: 'nism-10a', src: 'xa', code: 'NISM X-A', title: 'NISM Series X-A', subtitle: 'Investment Adviser (Level 1)', category: 'nism', level: 'Advisory', popular: 1,
     description: 'Financial planning, risk profiling and the SEBI (Investment Advisers) Regulations.',
-    series: [S('PLfHD8HnzzO3gZVRWxiv_npF6fKa9x1c5-', 'X-A complete course (2026)', 'NISM Series', 'English')], links: NISM_LINKS },
+    series: [S('PLfHD8HnzzO3gZVRWxiv_npF6fKa9x1c5-', 'X-A complete course (2026)', 'NISM Series', 'English'), S('PLmFN7_8sAtp_cMYiseT7gmvRMRngbcmZJ', 'N V Finance: Investment Adviser course (earlier combined syllabus)', 'N V Finance', 'English', { noAgeFilter: true })], links: NISM_LINKS },
   { id: 'nism-10b', src: 'xb', code: 'NISM X-B', title: 'NISM Series X-B', subtitle: 'Investment Adviser (Level 2)', category: 'nism', level: 'Advisory',
     description: 'Advanced advisory: portfolio construction, tax and estate planning, insurance, retirement planning.',
-    series: [S('PLfHD8HnzzO3iRmhhHrcPvIO90gXVsQ9Qe', 'X-B complete course (2026)', 'NISM Series', 'English')], links: NISM_LINKS },
+    series: [S('PLfHD8HnzzO3iRmhhHrcPvIO90gXVsQ9Qe', 'X-B complete course (2026)', 'NISM Series', 'English'), S('PLmFN7_8sAtp_cMYiseT7gmvRMRngbcmZJ', 'N V Finance: Investment Adviser course (earlier combined syllabus)', 'N V Finance', 'English', { noAgeFilter: true })], links: NISM_LINKS },
   { id: 'nism-12', src: null, code: 'NISM XII', title: 'NISM Series XII', subtitle: 'Securities Markets Foundation', category: 'nism', level: 'Foundation',
     description: 'Introductory certification on securities markets, intermediaries, products and regulation.',
     series: [S('PLnoEvI4d8KbqX1Xrd4hvaGWrDrkNtsiVc', 'Securities Markets Foundation', 'DeepStratAI', 'English')], links: NISM_LINKS },

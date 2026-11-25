@@ -4,7 +4,7 @@ import { api } from '../shared/api';
 import { Spinner } from '../shared/components';
 import { Account, ChangePasswordGate, CertificateView, CourseView, Courses, Dashboard, LessonView, Login, PathView, Paths, QuizRunner, Updates, Verify } from './pages';
 
-export interface Me { id: string; email: string; name: string; role: string; empId?: string; department?: string; mustChange: boolean }
+export interface Me { id: string; email: string; name: string; role: string; empId?: string; department?: string; team?: string | null; mustChange: boolean; cats?: string[] }
 interface AuthCtx { user: Me | null; setUser: (u: Me | null) => void; logout: () => Promise<void> }
 const Ctx = createContext<AuthCtx>({ user: null, setUser: () => {}, logout: async () => {} });
 export const useAuth = () => useContext(Ctx);
@@ -57,15 +57,16 @@ function Layout({ children }: { children: ReactNode }) {
           {item('/courses', '📚', 'Course library')}
           {item('/updates', '📰', 'Market updates')}
           <div className="sec">Browse</div>
-          {item('/courses?cat=academy', '🌱', 'FundsIndia Academy')}
-          {item('/courses?cat=nism', '🎓', 'NISM certifications')}
-          {item('/courses?cat=sales', '💼', 'Sales & service')}
-          {item('/courses?cat=tools', '🛠️', 'Zoho & Tata Tele')}
+          {(!user?.cats || user.cats.includes('academy')) && item('/courses?cat=academy', '🌱', 'FundsIndia Academy')}
+          {(!user?.cats || user.cats.includes('nism')) && item('/courses?cat=nism', '🎓', 'NISM certifications')}
+          {(!user?.cats || user.cats.includes('sales')) && item('/courses?cat=sales', '💼', 'Sales & service')}
+          {(!user?.cats || user.cats.includes('tools')) && item('/courses?cat=tools', '🛠️', 'Zoho & Tata Tele')}
           <div className="sec">My space</div>
           {item('/account', '👤', 'Profile & certificates')}
         </div>
         <div className="foot">
           <b>{user?.name}</b>
+          {user?.team && <div className="small"><span className="badge">{user.team}</span></div>}
           <div className="small muted" style={{ wordBreak: 'break-all' }}>{user?.email}</div>
           <button className="btn sm" style={{ marginTop: 10, width: '100%' }} onClick={logout}>Sign out</button>
         </div>
@@ -89,7 +90,7 @@ export function App() {
   const loc = useLocation();
 
   useEffect(() => {
-    api.get('/api/auth/me').then((r) => setUser(r.user)).catch(() => setUser(null)).finally(() => setReady(true));
+    api.get('/api/auth/me').then((r) => setUser(r.user ? { ...r.user, cats: r.cats } : null)).catch(() => setUser(null)).finally(() => setReady(true));
     const onExpired = () => setUser(null);
     window.addEventListener('session-expired', onExpired);
     return () => window.removeEventListener('session-expired', onExpired);

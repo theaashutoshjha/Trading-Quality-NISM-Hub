@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import { api } from '../shared/api';
 import { Spinner } from '../shared/components';
-import { AuditPage, CourseEditor, CoursesPage, LessonEditor, NewsPage, Overview, PathEditor, PathsPage, QuizEditor, SecurityPage, UsersPage } from './pages';
+import { AuditPage, CourseEditor, CoursesPage, LessonEditor, NewsPage, Overview, PathEditor, PathsPage, QuizEditor, SecurityPage, TeamAccessPage, UsersPage } from './pages';
 
 export interface Staff { id: string; email: string; name: string; role: 'admin' | 'trainer'; totp: boolean }
 const Ctx = createContext<{ me: Staff; logout: () => void }>(null as any);
@@ -36,7 +36,7 @@ export function App() {
             {item('/courses', '📚', 'Courses & videos')}
             {item('/paths', '🧭', 'Learning paths')}
             {item('/news', '📣', 'Bulletins & news')}
-            {isAdmin && (<><div className="sec">People</div>{item('/users', '👥', 'Users & access')}</>)}
+            {isAdmin && (<><div className="sec">People</div>{item('/users', '👥', 'Users & access')}{item('/teams', '🧩', 'Team access')}</>)}
             <div className="sec">System</div>
             {item('/security', '🔐', 'My security')}
             {isAdmin && item('/audit', '🧾', 'Audit log')}
@@ -61,6 +61,7 @@ export function App() {
               <Route path="/paths/:id" element={<PathEditor />} />
               <Route path="/news" element={<NewsPage />} />
               <Route path="/users" element={isAdmin ? <UsersPage /> : <Navigate to="/" />} />
+              <Route path="/teams" element={isAdmin ? <TeamAccessPage /> : <Navigate to="/" />} />
               <Route path="/security" element={<SecurityPage />} />
               <Route path="/audit" element={isAdmin ? <AuditPage /> : <Navigate to="/" />} />
               <Route path="*" element={<Navigate to="/" />} />

@@ -5,7 +5,7 @@ function Post($url, $body, $jar) { $f = J $body; $r = curl.exe -s -b $jar -c $ja
 function Get($url, $jar) { curl.exe -s -b $jar "$b$url" | ConvertFrom-Json }
 $A = Join-Path $d 'sA.txt'; $L = Join-Path $d 'sL.txt'; Remove-Item $A, $L -ErrorAction SilentlyContinue
 $null = Post '/api/admin/login' @{ email = 'boss@fundsindia.test'; password = 'Sup3rSecretPass!' } $A
-$null = Post '/api/auth/login' @{ email = 'asha@fundsindia.test'; password = 'Learner#Demo2026' } $L
+$null = Post '/api/auth/login' @{ email = 'asha@fundsindia.test'; password = 'Learner#Demo2026'; team = 'MF Silver' } $L
 $p = Get '/api/paths' $L; "paths: " + $p.paths.Count + " | first: " + $p.paths[0].title + " (" + $p.paths[0].total + " steps)"
 $pd = Get '/api/paths/path-investing-zero' $L; "path detail items: " + $pd.items.Count
 $lid = $pd.items[0].id

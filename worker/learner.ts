@@ -1,6 +1,7 @@
 import { Ctx, fail, flag, int, json, newId, str } from './lib';
 import { loadFeeds } from './feeds';
 import type { Route } from './router';
+import { allowedCourses, onlyAllowed } from './teams';
 
 const parseCourse = (c: any) => ({ ...c, links: JSON.parse(c.links || '[]') });
 
@@ -14,14 +15,15 @@ const shuffle = <T,>(a: T[]) => {
 };
 
 async function courseList(c: Ctx) {
+  const o = onlyAllowed(await allowedCourses(c), 'c.id');
   const r = await c.env.DB.prepare(
     `SELECT c.id,c.code,c.title,c.subtitle,c.category,c.description,c.level,c.hours,c.popular,
        (SELECT COUNT(*) FROM lessons l WHERE l.course_id=c.id AND l.published=1) AS lesson_count,
        (SELECT COUNT(*) FROM lessons l WHERE l.course_id=c.id AND l.published=1 AND l.kind='video') AS video_count,
        (SELECT COUNT(*) FROM progress p JOIN lessons l ON l.id=p.lesson_id AND l.published=1 WHERE p.user_id=? AND p.course_id=c.id) AS done,
        (SELECT COUNT(*) FROM quizzes q WHERE q.course_id=c.id AND q.published=1) AS quiz_count
-     FROM courses c WHERE c.published=1 ORDER BY c.sort, c.title`,
-  ).bind(c.user!.id).all<any>();
+     FROM courses c WHERE c.published=1${o.sql} ORDER BY c.sort, c.title`,
+  ).bind(c.user!.id, ...o.args).all<any>();
   return json({ courses: r.results });
 }
 
@@ -30,6 +32,8 @@ async function courseDetail(c: Ctx) {
   const db = c.env.DB, uid = c.user!.id;
   const course = await db.prepare(`SELECT * FROM courses WHERE id=? AND published=1`).bind(id).first<any>();
   if (!course) fail(404, 'Course not found.');
+  const allowedC = await allowedCourses(c);
+  if (allowedC && !allowedC.has(id)) fail(404, 'Course not found.');
   const [mods, lessons, quizzes, done, best, cert, vp] = await Promise.all([
     db.prepare(`SELECT id,title,weight,sort FROM modules WHERE course_id=? ORDER BY sort`).bind(id).all(),
     db.prepare(`SELECT id,module_id,title,kind,minutes,author,sort FROM lessons WHERE course_id=? AND published=1 ORDER BY sort`).bind(id).all(),
@@ -55,11 +59,14 @@ async function lessonDetail(c: Ctx) {
   const db = c.env.DB, uid = c.user!.id;
   const l = await db.prepare(`SELECT * FROM lessons WHERE id=? AND published=1`).bind(c.params[0]).first<any>();
   if (!l) fail(404, 'Lesson not found.');
+  const allowedL = await allowedCourses(c);
+  if (allowedL && !allowedL.has(l.course_id)) fail(404, 'Lesson not found.');
   const pathId = str(c.url.searchParams.get('path'), 80);
   // Navigation order: the learning path being followed, otherwise the course order.
   const sibs = pathId
-    ? await db.prepare(`SELECT l.id,l.title,l.kind FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 WHERE i.path_id=? ORDER BY i.sort`).bind(pathId).all<{ id: string; title: string; kind: string }>()
+    ? await db.prepare(`SELECT l.id,l.title,l.kind,l.course_id FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 WHERE i.path_id=? ORDER BY i.sort`).bind(pathId).all<{ id: string; title: string; kind: string; course_id: string }>()
     : await db.prepare(`SELECT id,title,kind FROM lessons WHERE course_id=? AND published=1 ORDER BY sort`).bind(l.course_id).all<{ id: string; title: string; kind: string }>();
+  if (allowedL) sibs.results = sibs.results.filter((s: any) => !s.course_id || allowedL.has(s.course_id));
   const i = sibs.results.findIndex((s) => s.id === l.id);
   const [done, course, mod, vp, path] = await Promise.all([
     db.prepare(`SELECT 1 FROM progress WHERE user_id=? AND lesson_id=?`).bind(uid, l.id).first(),
@@ -79,6 +86,8 @@ async function startQuiz(c: Ctx) {
   const db = c.env.DB;
   const q = await db.prepare(`SELECT * FROM quizzes WHERE id=? AND published=1`).bind(c.params[0]).first<any>();
   if (!q) fail(404, 'Quiz not found.');
+  const allowedQ = await allowedCourses(c);
+  if (allowedQ && !allowedQ.has(q.course_id)) fail(404, 'Quiz not found.');
   const rows = await db.prepare(`SELECT id,question,options FROM questions WHERE quiz_id=?`).bind(q.id).all<any>();
   if (!rows.results.length) fail(404, 'This quiz has no questions yet.');
   // Mock tests are fixed full-length papers: every question is served (in random order), so a mock is always the full paper.
@@ -100,6 +109,8 @@ async function submitQuiz(c: Ctx) {
   if (!s || s.quiz_id !== c.params[0]) fail(404, 'Quiz session not found.');
   if (s.submitted) fail(409, 'This attempt was already submitted.');
   const q = await db.prepare(`SELECT * FROM quizzes WHERE id=?`).bind(s.quiz_id).first<any>();
+  const allowedS = await allowedCourses(c);
+  if (allowedS && !allowedS.has(q.course_id)) fail(404, 'Quiz not found.');
   const ids: string[] = JSON.parse(s.question_ids);
   const answers: Record<string, number> = typeof b.answers === 'object' && b.answers ? (b.answers as any) : {};
   const qs = await db.prepare(`SELECT id,question,options,answer,explanation FROM questions WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all<any>();
@@ -138,13 +149,16 @@ async function submitQuiz(c: Ctx) {
 }
 
 async function pathList(c: Ctx) {
+  const o = onlyAllowed(await allowedCourses(c), 'l.course_id');
   const r = await c.env.DB.prepare(
     `SELECT p.id,p.title,p.description,p.level,p.icon,
-       (SELECT COUNT(*) FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 WHERE i.path_id=p.id) AS total,
-       (SELECT COUNT(*) FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 JOIN progress pr ON pr.lesson_id=i.lesson_id AND pr.user_id=? WHERE i.path_id=p.id) AS done,
-       (SELECT COALESCE(SUM(l.minutes),0) FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 WHERE i.path_id=p.id) AS minutes
+       (SELECT COUNT(*) FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 WHERE i.path_id=p.id${o.sql}) AS total,
+       (SELECT COUNT(*) FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 JOIN progress pr ON pr.lesson_id=i.lesson_id AND pr.user_id=? WHERE i.path_id=p.id${o.sql}) AS done,
+       (SELECT COALESCE(SUM(l.minutes),0) FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 WHERE i.path_id=p.id${o.sql}) AS minutes
      FROM paths p WHERE p.published=1 ORDER BY p.sort`,
-  ).bind(c.user!.id).all();
+  ).bind(...o.args, c.user!.id, ...o.args, ...o.args).all();
+  // A path with nothing this team can open is hidden.
+  r.results = (r.results as any[]).filter((p) => p.total > 0);
   return json({ paths: r.results });
 }
 
@@ -152,6 +166,7 @@ async function pathDetail(c: Ctx) {
   const db = c.env.DB, uid = c.user!.id;
   const p = await db.prepare(`SELECT id,title,description,level,icon FROM paths WHERE id=? AND published=1`).bind(c.params[0]).first();
   if (!p) fail(404, 'Learning path not found.');
+  const oi = onlyAllowed(await allowedCourses(c), 'l.course_id');
   const items = await db.prepare(
     `SELECT l.id,l.title,l.kind,l.minutes,l.author,c.title AS course, m.title AS module,
             CASE WHEN pr.lesson_id IS NULL THEN 0 ELSE 1 END AS done,
@@ -160,8 +175,9 @@ async function pathDetail(c: Ctx) {
        JOIN courses c ON c.id=l.course_id LEFT JOIN modules m ON m.id=l.module_id
        LEFT JOIN progress pr ON pr.lesson_id=l.id AND pr.user_id=?
        LEFT JOIN video_progress vp ON vp.lesson_id=l.id AND vp.user_id=?
-      WHERE i.path_id=? ORDER BY i.sort`,
-  ).bind(uid, uid, c.params[0]).all();
+      WHERE i.path_id=?${oi.sql} ORDER BY i.sort`,
+  ).bind(uid, uid, c.params[0], ...oi.args).all();
+  if (!items.results.length) fail(404, 'Learning path not found.');
   return json({ path: p, items: items.results });
 }
 
@@ -183,6 +199,8 @@ export const learnerRoutes: Route[] = [
     const b = await c.body();
     const l = await c.env.DB.prepare(`SELECT id,course_id FROM lessons WHERE id=?`).bind(c.params[0]).first<any>();
     if (!l) fail(404, 'Lesson not found.');
+    const okC = await allowedCourses(c);
+    if (okC && !okC.has(l.course_id)) fail(404, 'Lesson not found.');
     if (flag(b.done)) await c.env.DB.prepare(`INSERT OR IGNORE INTO progress (user_id,lesson_id,course_id) VALUES (?,?,?)`).bind(c.user!.id, l.id, l.course_id).run();
     else await c.env.DB.prepare(`DELETE FROM progress WHERE user_id=? AND lesson_id=?`).bind(c.user!.id, l.id).run();
     return json({ ok: true });
@@ -192,6 +210,8 @@ export const learnerRoutes: Route[] = [
     const b = await c.body();
     const l = await c.env.DB.prepare(`SELECT id,course_id FROM lessons WHERE id=? AND kind='video'`).bind(c.params[0]).first<any>();
     if (!l) fail(404, 'Lesson not found.');
+    const okP = await allowedCourses(c);
+    if (okP && !okP.has(l.course_id)) fail(404, 'Lesson not found.');
     const duration = Math.max(0, Math.min(int(b.duration), 86400)), seconds = Math.max(0, Math.min(int(b.seconds), duration || 86400));
     await c.env.DB.prepare(
       `INSERT INTO video_progress (user_id,lesson_id,seconds,duration,updated_at) VALUES (?,?,?,?,datetime('now'))
@@ -212,6 +232,8 @@ export const learnerRoutes: Route[] = [
   // Everything on this page is the signed-in user's own data.
   ['GET', '/api/dashboard', 'learner', async (c) => {
     const db = c.env.DB, uid = c.user!.id;
+    const al = await allowedCourses(c);
+    const oL = onlyAllowed(al, 'l.course_id'), oC = onlyAllowed(al, 'c.id');
     const [stats, watching, news, started, attempts, certs, days, paths] = await Promise.all([
       db.prepare(`SELECT (SELECT COUNT(*) FROM progress WHERE user_id=?) lessons,
                          (SELECT ROUND(AVG(pct),1) FROM attempts WHERE user_id=?) avg_score,
@@ -220,21 +242,21 @@ export const learnerRoutes: Route[] = [
                          (SELECT COALESCE(ROUND(SUM(seconds)/60.0),0) FROM video_progress WHERE user_id=?) watch_minutes`).bind(uid, uid, uid, uid, uid).first(),
       db.prepare(`SELECT l.id,l.title,l.minutes,vp.seconds,vp.duration,c.title AS course_title
                     FROM video_progress vp JOIN lessons l ON l.id=vp.lesson_id JOIN courses c ON c.id=l.course_id
-                   WHERE vp.user_id=? AND vp.duration>0 AND vp.seconds>5 AND vp.seconds < vp.duration*0.9
-                   ORDER BY vp.updated_at DESC LIMIT 4`).bind(uid).all(),
+                   WHERE vp.user_id=? AND vp.duration>0 AND vp.seconds>5 AND vp.seconds < vp.duration*0.9${oL.sql}
+                   ORDER BY vp.updated_at DESC LIMIT 4`).bind(uid, ...oL.args).all(),
       db.prepare(`SELECT id,title,category,url,published_at,pinned FROM news WHERE published=1 ORDER BY pinned DESC, published_at DESC LIMIT 5`).all(),
       db.prepare(`SELECT c.id,c.code,c.title,COUNT(p.lesson_id) AS done,(SELECT COUNT(*) FROM lessons l WHERE l.course_id=c.id AND l.published=1) AS total
-                    FROM progress p JOIN courses c ON c.id=p.course_id WHERE p.user_id=? GROUP BY c.id ORDER BY MAX(p.completed_at) DESC LIMIT 6`).bind(uid).all(),
+                    FROM progress p JOIN courses c ON c.id=p.course_id WHERE p.user_id=?${oC.sql} GROUP BY c.id ORDER BY MAX(p.completed_at) DESC LIMIT 6`).bind(uid, ...oC.args).all(),
       db.prepare(`SELECT a.pct,a.passed,a.created_at,q.title FROM attempts a JOIN quizzes q ON q.id=a.quiz_id WHERE a.user_id=? ORDER BY a.created_at DESC LIMIT 5`).bind(uid).all(),
       db.prepare(`SELECT ce.id,ce.issued_at,c.title FROM certificates ce JOIN courses c ON c.id=ce.course_id WHERE ce.user_id=? AND ce.revoked=0`).bind(uid).all(),
       db.prepare(`SELECT DISTINCT d FROM (SELECT substr(completed_at,1,10) d FROM progress WHERE user_id=? UNION SELECT substr(updated_at,1,10) FROM video_progress WHERE user_id=? UNION SELECT substr(created_at,1,10) FROM attempts WHERE user_id=?) ORDER BY d DESC LIMIT 400`).bind(uid, uid, uid).all<{ d: string }>(),
       db.prepare(
         `SELECT p.id,p.title,p.icon,
-           (SELECT COUNT(*) FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 WHERE i.path_id=p.id) AS total,
-           (SELECT COUNT(*) FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 JOIN progress pr ON pr.lesson_id=i.lesson_id AND pr.user_id=? WHERE i.path_id=p.id) AS done,
-           (SELECT l.id FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 WHERE i.path_id=p.id AND i.lesson_id NOT IN (SELECT lesson_id FROM progress WHERE user_id=?) ORDER BY i.sort LIMIT 1) AS next_id
+           (SELECT COUNT(*) FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 WHERE i.path_id=p.id${oL.sql}) AS total,
+           (SELECT COUNT(*) FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 JOIN progress pr ON pr.lesson_id=i.lesson_id AND pr.user_id=? WHERE i.path_id=p.id${oL.sql}) AS done,
+           (SELECT l.id FROM path_items i JOIN lessons l ON l.id=i.lesson_id AND l.published=1 WHERE i.path_id=p.id${oL.sql} AND i.lesson_id NOT IN (SELECT lesson_id FROM progress WHERE user_id=?) ORDER BY i.sort LIMIT 1) AS next_id
          FROM paths p WHERE p.published=1 ORDER BY p.sort`,
-      ).bind(uid, uid).all<any>(),
+      ).bind(...oL.args, uid, ...oL.args, ...oL.args, uid).all<any>(),
     ]);
     const myPaths = paths.results.filter((p: any) => p.total > 0);
     return json({
@@ -262,9 +284,11 @@ export const learnerRoutes: Route[] = [
     const q = str(c.url.searchParams.get('q'), 60).replace(/[%_]/g, '');
     if (q.length < 2) return json({ courses: [], lessons: [] });
     const like = `%${q}%`;
+    const al = await allowedCourses(c);
+    const oc = onlyAllowed(al, 'id'), ol = onlyAllowed(al, 'l.course_id');
     const [courses, lessons] = await Promise.all([
-      c.env.DB.prepare(`SELECT id,code,title,subtitle FROM courses WHERE published=1 AND (title LIKE ? OR code LIKE ? OR subtitle LIKE ?) LIMIT 8`).bind(like, like, like).all(),
-      c.env.DB.prepare(`SELECT l.id,l.title,l.kind,c.title AS course FROM lessons l JOIN courses c ON c.id=l.course_id WHERE l.published=1 AND c.published=1 AND (l.title LIKE ? OR l.body LIKE ?) LIMIT 20`).bind(like, like).all(),
+      c.env.DB.prepare(`SELECT id,code,title,subtitle FROM courses WHERE published=1${oc.sql} AND (title LIKE ? OR code LIKE ? OR subtitle LIKE ?) LIMIT 8`).bind(...oc.args, like, like, like).all(),
+      c.env.DB.prepare(`SELECT l.id,l.title,l.kind,c.title AS course FROM lessons l JOIN courses c ON c.id=l.course_id WHERE l.published=1 AND c.published=1${ol.sql} AND (l.title LIKE ? OR l.body LIKE ?) LIMIT 20`).bind(...ol.args, like, like).all(),
     ]);
     return json({ courses: courses.results, lessons: lessons.results });
   }],

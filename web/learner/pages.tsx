@@ -12,7 +12,8 @@ const kindIcon = (k: string) => (k === 'video' ? '▶' : k === 'link' ? '🔗' :
 /* ------------------------------------------------------------------ Login */
 export function Login() {
   const { setUser } = useAuth();
-  const [f, setF] = useState({ email: '', password: '' });
+  const TEAMS = ['MF Onboarding', 'MF Digital', 'MF Silver', 'MF Gold', 'MF Platinum', 'Equity Onboarding', 'Equity Regular', 'Customer Support'];
+  const [f, setF] = useState(() => { let team = ''; try { team = localStorage.getItem('fi_team') || ''; } catch { /* private mode */ } return { userId: '', password: '', team }; });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [show, setShow] = useState(false);
@@ -22,8 +23,10 @@ export function Login() {
     e.preventDefault();
     setErr(''); setBusy(true);
     try {
-      const r = await api.post('/api/auth/login', { email: f.email, password: f.password });
-      setUser(r.user);
+      const r = await api.post('/api/auth/login', { userId: f.userId, password: f.password, team: f.team });
+      try { localStorage.setItem('fi_team', f.team); } catch { /* ignore */ }
+      const me = await api.get('/api/auth/me').catch(() => null);
+      setUser(me?.user ? { ...me.user, cats: me.cats } : r.user);
     } catch (x: any) { setErr(x.message); } finally { setBusy(false); }
   }
 
@@ -38,16 +41,18 @@ export function Login() {
         <form className="box stack" onSubmit={submit} autoComplete="on">
           <img src="/logo.png" alt="FundsIndia" style={{ height: 44 }} />
           <div><h1 style={{ marginBottom: 4 }}>Learner sign-in</h1>
-            <div className="muted small">Accounts are created by your administrator. Use the e-mail and password you were given.</div></div>
-          <div><label className="f">Work e-mail</label><input type="email" value={f.email} onChange={set('email')} required autoComplete="username" /></div>
+            <div className="muted small">Accounts are created by your administrator. Sign in with your User ID, password and the team you belong to — what you see depends on your team.</div></div>
+          <div><label className="f" htmlFor="uid">User ID</label><input id="uid" value={f.userId} onChange={set('userId')} required autoComplete="username" placeholder="Employee ID or work e-mail" autoCapitalize="none" spellCheck={false} /></div>
           <div><label className="f">Password</label>
             <div style={{ position: 'relative' }}>
               <input type={show ? 'text' : 'password'} value={f.password} onChange={set('password')} required autoComplete="current-password" />
               <button type="button" className="btn sm ghost" style={{ position: 'absolute', right: 6, top: 6 }} onClick={() => setShow(!show)}>{show ? 'Hide' : 'Show'}</button>
             </div>
           </div>
+          <div><label className="f" htmlFor="team">Team</label>
+            <select id="team" value={f.team} onChange={set('team')} required><option value="" disabled>Select your team</option>{TEAMS.map((t) => <option key={t} value={t}>{t}</option>)}</select></div>
           {err && <div className="alert err" role="alert">{err}</div>}
-          <button className="btn primary" style={{ width: '100%', padding: 14 }} disabled={busy}>{busy ? 'Please wait…' : 'Sign in'}</button>
+          <button className="btn primary" style={{ width: '100%', padding: 14 }} disabled={busy || !f.team}>{busy ? 'Please wait…' : 'Sign in'}</button>
           <div className="muted small center">🔒 Internal use only. Your progress and data are private to your account and are kept when you sign out.</div>
         </form>
       </div>
@@ -654,7 +659,7 @@ export function Account() {
       <h1>Profile & certificates</h1>
       <div className="grid g2" style={{ alignItems: 'start' }}>
         <div className="card"><div className="brandbar" /><h2>{user?.name}</h2><div className="muted">{user?.email}</div>
-          {user?.empId && <div className="small">Employee ID: {user.empId}</div>}{user?.department && <div className="small">Department: {user.department}</div>}
+          {user?.empId && <div className="small">Employee ID: {user.empId}</div>}{user?.department && <div className="small">Department: {user.department}</div>}{user?.team && <div className="small">Team: <b>{user.team}</b></div>}
           <div className="alert ok" style={{ marginTop: 16 }}>🔒 Your progress, quiz scores and certificates are private to your account.</div></div>
         <div className="card"><h2>Change password</h2><PasswordForm /></div>
       </div>

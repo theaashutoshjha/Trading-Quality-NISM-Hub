@@ -3,23 +3,27 @@
 } from './lib';
 import { dummyVerify, hashPassword, newTotpSecret, passwordProblem, totpUri, verifyPassword, verifyTotp } from './security';
 import type { Route } from './router';
+import { TEAMS, allowedCourses, isTeam } from './teams';
 
 type Row = User & { pw_hash: string; totp_secret: string | null };
 
 async function login(c: Ctx, kind: Kind) {
   const b = await c.body();
-  const email = str(b.email, 120).toLowerCase();
+  // "User ID" is the employee ID; the work e-mail address also works (b.email is accepted for older clients).
+  const email = str(b.userId ?? b.email, 120).toLowerCase();
   const password = typeof b.password === 'string' ? b.password.slice(0, 200) : '';
-  if (!email || !password) fail(400, 'Enter your e-mail and password.');
+  const team = str(b.team, 40);
+  if (!email || !password) fail(400, kind === 'learner' ? 'Enter your User ID and password.' : 'Enter your e-mail and password.');
+  if (kind === 'learner' && !isTeam(team)) fail(400, 'Select your team.');
 
   const keys = [`${kind}:u:${email}`, `${kind}:ip:${c.ip}`];
   await checkLock(c.env, keys);
 
-  const u = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(email).first<Row>();
+  const u = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ? OR emp_id = ? COLLATE NOCASE ORDER BY (email = ?) DESC LIMIT 1`).bind(email, email, email).first<Row>();
   const genericFail = async (why: string): Promise<never> => {
     await recordFail(c.env, keys);
     await audit(c.env, email, `login_failed_${kind}`, why, c.ip);
-    return fail(401, 'Invalid e-mail or password.');
+    return fail(401, kind === 'learner' ? 'Invalid User ID, password or team.' : 'Invalid e-mail or password.');
   };
 
   if (!u) {
@@ -28,6 +32,8 @@ async function login(c: Ctx, kind: Kind) {
   }
   if (!(await verifyPassword(password, u.pw_hash))) return genericFail('bad password');
   if (kind === 'admin' && u.role === 'learner') return genericFail('not staff');
+  // Learners must sign in under the team they belong to. Staff (trainer/admin) can pick any team.
+  if (kind === 'learner' && u.role === 'learner' && u.team !== team) return genericFail(u.team ? 'wrong team' : 'no team assigned');
 
   if (kind === 'admin' && u.totp_enabled && u.totp_secret) {
     const code = str(b.code, 8);
@@ -45,7 +51,7 @@ async function login(c: Ctx, kind: Kind) {
   return json({ ok: true, user: pub(u), mustChange: !!u.must_change }, 200, { 'Set-Cookie': cookieHeader(c.env, kind, token) });
 }
 
-const pub = (u: User) => ({ id: u.id, email: u.email, name: u.name, role: u.role, empId: u.emp_id, department: u.department, mustChange: !!u.must_change, totp: !!u.totp_enabled });
+const pub = (u: User) => ({ id: u.id, email: u.email, name: u.name, role: u.role, empId: u.emp_id, department: u.department, team: u.team, mustChange: !!u.must_change, totp: !!u.totp_enabled });
 
 async function logout(c: Ctx, kind: Kind) {
   await destroySession(c.env, c.req, kind);
@@ -73,7 +79,14 @@ export const authRoutes: Route[] = [
   // ---------- Learner ----------
   ['POST', '/api/auth/login', 'none', (c) => login(c, 'learner')],
   ['POST', '/api/auth/logout', 'none', (c) => logout(c, 'learner')],
-  ['GET', '/api/auth/me', 'learner', (c) => json({ user: pub(c.user!) })],
+  ['GET', '/api/auth/me', 'learner', async (c) => {
+    // Course categories this user can open (drives the sidebar), plus the team list for the sign-in form.
+    const allowed = await allowedCourses(c);
+    const rows = await c.env.DB.prepare(`SELECT id, category FROM courses WHERE published = 1`).all<{ id: string; category: string }>();
+    const cats = [...new Set(rows.results.filter((r) => allowed === null || allowed.has(r.id)).map((r) => r.category))];
+    return json({ user: pub(c.user!), cats });
+  }],
+  ['GET', '/api/auth/teams', 'none', () => json({ teams: TEAMS })],
   ['POST', '/api/auth/password', 'learner', (c) => changePassword(c, 'learner')],
 
   // ---------- Admin portal ----------

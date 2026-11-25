@@ -5,7 +5,9 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
-import { COURSES, FI_CURATED, MAX_AGE_DAYS } from './catalog.mjs';
+import { COURSES, MAX_AGE_DAYS } from './catalog.mjs';
+import { buildAcademy } from './fi-academy.mjs';
+import { COMMON, TEAM_ACCESS } from './teams.mjs';
 import { PATHS } from './paths.mjs';
 import { EXTRA } from './extra.mjs';
 
@@ -18,7 +20,7 @@ const D = await import(pathToFileURL(join(tmp, 'data.mjs')).href);
 // ---------- video sources ----------
 const FI = JSON.parse(readFileSync(join(here, 'data', 'fi-channel.json'), 'utf8'));
 const PL = JSON.parse(readFileSync(join(here, 'data', 'playlists.json'), 'utf8'));
-const fiById = new Map(FI.map((v) => [v.id, v]));
+const FIPL = JSON.parse(readFileSync(join(here, 'data', 'fi-playlists.json'), 'utf8'));
 
 // Only videos that can actually be embedded (not deleted/private/embedding disabled) are seeded.
 const okFile = join(here, 'data', 'embed-ok.json');
@@ -41,7 +43,7 @@ async function embeddable(ids) {
 const cleanTitle = (t) =>
   t.replace(/#\w+/g, '').replace(/\s*\|\s*(FundsIndia|FundsIndia 360°|FIStocademy|FundsIndiaMarketry)\s*$/i, '').replace(/\s*\[link in Description\]/i, '').replace(/\s{2,}/g, ' ').replace(/[\s|–-]+$/, '').trim();
 
-const allIds = new Set([...FI_CURATED.flatMap(([, ids]) => ids)]);
+const allIds = new Set([...FI.map((v) => v.id), ...FIPL.flatMap((p) => p.videos.map((v) => v.id))]);
 for (const c of COURSES) {
   for (const s of c.series) for (const v of PL[s.id] || []) allIds.add(v.id);
   for (const v of c.videos || []) allIds.add(v[0]);
@@ -335,11 +337,10 @@ for (const c of COURSES) {
     c.videos.filter((v) => playable(v[0])).forEach(([id, title, channel, mins]) => addVideo(mid, { id, title, channel, mins }));
   }
   if (c.id === 'fi-academy') {
-    for (const [cat, ids] of FI_CURATED) {
-      const vids = ids.map((id) => fiById.get(id)).filter((v) => v && playable(v.id));
-      if (!vids.length) continue;
-      const mid = addModule(cat);
-      vids.forEach((v) => addVideo(mid, { id: v.id, title: v.title, mins: Math.max(1, Math.round(v.dur / 60)), channel: 'FundsIndia' }));
+    // Every video on the FundsIndia channel, under headers that match what each video is about (see seed/fi-academy.mjs).
+    for (const g of buildAcademy(FI, FIPL, playable)) {
+      const mid = addModule(g.title);
+      g.videos.forEach((v) => addVideo(mid, { ...v, channel: 'FundsIndia' }));
     }
   }
   courseLessons[cid] = { videoIds: new Set([...lessonIds].filter((x) => x.startsWith(cid + '-v-'))) };
@@ -375,6 +376,14 @@ for (const c of COURSES) {
 // ---------- remove videos that cannot be played (deleted, private, or embedding disabled) ----------
 const dead = Object.entries(embedCache).filter(([, ok]) => ok === false).map(([id]) => id);
 for (let i = 0; i < dead.length; i += 50) stmts.push(`DELETE FROM lessons WHERE kind='video' AND video_id IN (${dead.slice(i, i + 50).map(q).join(',')});`);
+
+// ---------- default team access (applied once; later edits in the Admin Portal are never overwritten) ----------
+for (const [team, ids] of Object.entries(TEAM_ACCESS)) {
+  for (const id of [...new Set([...COMMON, ...ids])]) {
+    stmts.push(`INSERT OR IGNORE INTO team_access (team,course_id) SELECT ${q(team)},${q(id)} WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key='team_access_seeded') AND EXISTS (SELECT 1 FROM courses WHERE id=${q(id)});`);
+  }
+}
+stmts.push(`INSERT OR IGNORE INTO settings (key,value) VALUES ('team_access_seeded','1');`);
 
 // ---------- news seed ----------
 const news = [
