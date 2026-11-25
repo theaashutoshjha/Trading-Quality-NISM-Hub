@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
+import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from '../shared/api';
 import { Spinner } from '../shared/components';
-import { AuditPage, CourseEditor, CoursesPage, LessonEditor, NewsPage, Overview, PathEditor, PathsPage, QuizEditor, SecurityPage, TeamAccessPage, UsersPage } from './pages';
+import { AuditPage, CourseEditor, CoursesPage, LessonEditor, NewsPage, Overview, PathEditor, PathsPage, FeedbackPage, QuizEditor, SecurityPage, TeamAccessPage, UsersPage } from './pages';
 
 export interface Staff { id: string; email: string; name: string; role: 'admin' | 'trainer'; totp: boolean }
 const Ctx = createContext<{ me: Staff; logout: () => void }>(null as any);
@@ -12,6 +12,9 @@ export function App() {
   const [me, setMe] = useState<Staff | null>(null);
   const [ready, setReady] = useState(false);
   const [open, setOpen] = useState(false);
+  const [unread, setUnread] = useState(0);
+  const loc = useLocation();
+  useEffect(() => { api.get('/api/admin/feedback/summary').then((r) => setUnread(r.new || 0)).catch(() => {}); }, [loc.pathname]);
   useEffect(() => {
     api.get('/api/admin/me').then((r) => setMe(r.user)).catch(() => {}).finally(() => setReady(true));
     const f = () => location.reload(); // session expired -> server shows the login page
@@ -28,7 +31,8 @@ export function App() {
   return (
     <Ctx.Provider value={{ me, logout }}>
       <div className="shell">
-        <aside className={'side' + (open ? ' open' : '')}>
+        <div className={'scrim' + (open ? ' on' : '')} onClick={() => setOpen(false)} aria-hidden />
+        <aside className={'side' + (open ? ' open' : '')} aria-label="Main menu">
           <div className="panel">
             <div className="brand"><img src="/logo.png" alt="FundsIndia" /><div><small>Admin Portal</small></div></div>
             {item('/', '📊', 'Overview')}
@@ -36,6 +40,7 @@ export function App() {
             {item('/courses', '📚', 'Courses & videos')}
             {item('/paths', '🧭', 'Learning paths')}
             {item('/news', '📣', 'Bulletins & news')}
+            {item('/feedback', '💬', unread ? `Feedback & messages (${unread})` : 'Feedback & messages')}
             {isAdmin && (<><div className="sec">People</div>{item('/users', '👥', 'Users & access')}{item('/teams', '🧩', 'Team access')}</>)}
             <div className="sec">System</div>
             {item('/security', '🔐', 'My security')}
@@ -60,6 +65,7 @@ export function App() {
               <Route path="/paths" element={<PathsPage />} />
               <Route path="/paths/:id" element={<PathEditor />} />
               <Route path="/news" element={<NewsPage />} />
+              <Route path="/feedback" element={<FeedbackPage />} />
               <Route path="/users" element={isAdmin ? <UsersPage /> : <Navigate to="/" />} />
               <Route path="/teams" element={isAdmin ? <TeamAccessPage /> : <Navigate to="/" />} />
               <Route path="/security" element={<SecurityPage />} />

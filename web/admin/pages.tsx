@@ -217,21 +217,97 @@ export function TeamAccessPage() {
 export function CoursesPage() {
   const r = useLoad(() => api.get('/api/admin/courses'));
   const [show, setShow] = useState(false);
+  const [cat, setCat] = useState('all');
   const nav = useNavigate();
   if (r.loading) return <Spinner />;
   if (r.error) return <ErrorBox error={r.error} retry={r.reload} />;
+  const courses: any[] = r.data.courses;
+  // Every category is shown as its own section (Sales & Service, NISM, Academy, ...), in the same order learners see them.
+  const order = Object.keys(CATEGORIES);
+  const present = order.filter((k) => courses.some((c) => c.category === k)).concat(Array.from(new Set(courses.map((c) => c.category))).filter((k) => !order.includes(k as string)) as string[]);
+  const shown = present.filter((k) => cat === 'all' || cat === k);
   return (
     <div className="stack">
-      <div className="row between"><h1>Courses & lessons</h1><button className="btn primary" onClick={() => setShow(true)}>＋ New course</button></div>
-      <div className="card tscroll"><table className="t"><thead><tr><th>Course</th><th>Category</th><th>Videos</th><th>Lessons</th><th>Quizzes / Qs</th><th>Status</th><th></th></tr></thead><tbody>
-        {r.data.courses.map((c: any) => (
-          <tr key={c.id}><td><b>{c.title}</b><div className="muted small">{c.code} — {c.subtitle}</div></td><td>{CATEGORIES[c.category] || c.category}</td><td>{c.playlists.length}</td><td>{c.lessons}</td><td>{c.quizzes} / {c.questions}</td>
-            <td><span className={'badge ' + (c.published ? 'g' : 'm')}>{c.published ? 'Published' : 'Draft'}</span></td><td><Link className="btn sm" to={'/courses/' + c.id}>Edit</Link></td></tr>))}
-      </tbody></table></div>
+      <div className="row between wrap"><h1>Courses & videos</h1><button className="btn primary" onClick={() => setShow(true)}>＋ New course</button></div>
+      <div className="row wrap" role="tablist" aria-label="Category">
+        <button className={'chip' + (cat === 'all' ? ' on' : '')} onClick={() => setCat('all')}>All ({courses.length})</button>
+        {present.map((k) => <button key={k} className={'chip' + (cat === k ? ' on' : '')} onClick={() => setCat(k)}>{CATEGORIES[k] || k} ({courses.filter((c) => c.category === k).length})</button>)}
+      </div>
+      {shown.map((k) => {
+        const list = courses.filter((c) => c.category === k);
+        return (
+          <div className="card" key={k}>
+            <div className="row between wrap"><h2 style={{ margin: 0 }}>{CATEGORIES[k] || k}</h2><span className="small muted">{list.length} course{list.length === 1 ? '' : 's'} · {list.reduce((n, c) => n + c.lessons, 0)} lessons</span></div>
+            <div className="tscroll" style={{ marginTop: 10 }}><table className="t"><thead><tr><th>Course</th><th>Lessons</th><th>Quizzes / Qs</th><th>Status</th><th></th></tr></thead><tbody>
+              {list.map((c: any) => (
+                <tr key={c.id}><td><b>{c.title}</b><div className="muted small">{c.code} — {c.subtitle}</div></td><td>{c.lessons}</td><td>{c.quizzes} / {c.questions}</td>
+                  <td><span className={'badge ' + (c.published ? 'g' : 'm')}>{c.published ? 'Published' : 'Draft'}</span></td><td><Link className="btn sm" to={'/courses/' + c.id}>Edit</Link></td></tr>))}
+            </tbody></table></div>
+          </div>
+        );
+      })}
       {show && <NewCourse onClose={() => setShow(false)} onDone={(id) => nav('/courses/' + id)} />}
     </div>
   );
 }
+
+/* ---------- Feedback & messages from learners ---------- */
+const CAT_LABEL: Record<string, string> = { issue: 'Problem', content: 'Content', access: 'Access', suggestion: 'Suggestion', other: 'Other' };
+export function FeedbackPage() {
+  const [kind, setKind] = useState('');
+  const [status, setStatus] = useState('');
+  const [q, setQ] = useState('');
+  const r = useLoad(() => api.get('/api/admin/feedback?' + new URLSearchParams({ ...(kind ? { kind } : {}), ...(status ? { status } : {}), ...(q.trim().length >= 2 ? { q: q.trim() } : {}) }).toString()), [kind, status, q]);
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  async function setState(it: any, st: string) {
+    try { await api.put('/api/admin/feedback/' + it.id, { status: st, adminNote: notes[it.id] ?? it.admin_note ?? '' }); r.reload(); } catch (e: any) { alert(e.message); }
+  }
+  const { me } = useStaff();
+  async function del(it: any) { if (!confirm('Delete this item permanently?')) return; try { await api.del('/api/admin/feedback/' + it.id); r.reload(); } catch (e: any) { alert(e.message); } }
+  const counts = r.data?.counts;
+  const stars = (n: number) => '★'.repeat(n) + '☆'.repeat(5 - n);
+  return (
+    <div className="stack">
+      <div><h1>Feedback & messages</h1><p className="muted" style={{ margin: 0 }}>What learners send from the "Was this helpful?" box under every lesson and from <b>Contact us</b>.</p></div>
+      {counts && (
+        <div className="grid g4">
+          <div className="card stat"><div className="ic">📥</div><div><b>{counts.new_count || 0}</b><span>New</span></div></div>
+          <div className="card stat"><div className="ic">⭐</div><div><b>{counts.avg_rating ?? '—'}</b><span>Average rating</span></div></div>
+          <div className="card stat"><div className="ic">💬</div><div><b>{counts.content || 0}</b><span>Content feedback</span></div></div>
+          <div className="card stat"><div className="ic">✉️</div><div><b>{counts.contact || 0}</b><span>Contact messages</span></div></div>
+        </div>)}
+      <div className="row wrap">
+        {[['', 'All'], ['contact', 'Contact messages'], ['content', 'Content feedback']].map(([k, l]) => <button key={k} className={'chip' + (kind === k ? ' on' : '')} onClick={() => setKind(k)}>{l}</button>)}
+        <span className="grow" />
+        {[['', 'Any status'], ['new', 'New'], ['read', 'Read'], ['resolved', 'Resolved']].map(([k, l]) => <button key={k} className={'chip' + (status === k ? ' on' : '')} onClick={() => setStatus(k)}>{l}</button>)}
+      </div>
+      <input placeholder="Search learner, subject, message or lesson…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search feedback" />
+      {r.loading ? <Spinner /> : r.error ? <ErrorBox error={r.error} retry={r.reload} /> : !r.data.items.length ? <div className="card muted">Nothing here yet.</div> : r.data.items.map((it: any) => (
+        <div className="card" key={it.id}>
+          <div className="row wrap between">
+            <div className="row wrap" style={{ gap: 8 }}>
+              <span className={'badge ' + (it.kind === 'contact' ? '' : 'm')}>{it.kind === 'contact' ? '✉️ Contact' : '💬 Content'}</span>
+              <span className={'badge ' + (it.status === 'new' ? 'w' : it.status === 'resolved' ? 'g' : 'm')}>{it.status}</span>
+              {it.kind === 'contact' && it.category && <span className="badge m">{CAT_LABEL[it.category] || it.category}</span>}
+              {it.kind === 'content' && <span style={{ color: '#f5a524', letterSpacing: 2 }} title={it.rating + ' of 5'}>{stars(it.rating || 0)}</span>}
+            </div>
+            <span className="small muted">{fmtDateTime(it.updated_at || it.created_at)}</span>
+          </div>
+          <div style={{ margin: '10px 0 4px' }}><b>{it.user_name}</b> <span className="muted small">· {it.user_email}{it.team ? ' · ' + it.team : ''}</span></div>
+          {it.kind === 'contact' ? <div style={{ fontWeight: 700 }}>{it.subject}</div> : <div className="small muted">On: {it.lesson_id ? <Link to={'/lesson/' + it.lesson_id}>{it.target_title}</Link> : <Link to={'/courses/' + it.course_id}>{it.target_title}</Link>}</div>}
+          {it.message ? <p style={{ whiteSpace: 'pre-wrap', margin: '8px 0 0' }}>{it.message}</p> : <p className="muted small" style={{ margin: '8px 0 0' }}>(rating only, no comment)</p>}
+          <div className="row wrap" style={{ marginTop: 12, gap: 8 }}>
+            <input style={{ flex: 1, minWidth: 200 }} placeholder="Internal note (optional)" maxLength={1000} defaultValue={it.admin_note || ''} onChange={(e) => setNotes({ ...notes, [it.id]: e.target.value })} aria-label="Internal note" />
+            {it.status !== 'read' && <button className="btn sm" onClick={() => setState(it, 'read')}>Mark read</button>}
+            {it.status !== 'resolved' && <button className="btn sm good" onClick={() => setState(it, 'resolved')}>Resolve</button>}
+            {it.status === 'resolved' && <button className="btn sm" onClick={() => setState(it, 'new')}>Reopen</button>}
+            {me.role === 'admin' && <button className="btn sm danger" onClick={() => del(it)}>Delete</button>}
+          </div>
+        </div>))}
+    </div>
+  );
+}
+
 function NewCourse({ onClose, onDone }: { onClose: () => void; onDone: (id: string) => void }) {
   const [f, setF] = useState({ code: '', title: '', subtitle: '', category: 'nism', published: false });
   const [err, setErr] = useState('');

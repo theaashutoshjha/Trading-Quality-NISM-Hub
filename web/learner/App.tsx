@@ -2,7 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, Re
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../shared/api';
 import { Spinner } from '../shared/components';
-import { Account, ChangePasswordGate, CertificateView, CourseView, Courses, Dashboard, LessonView, Login, PathView, Paths, QuizRunner, Updates, Verify } from './pages';
+import { ChangePasswordGate, CertificateView, ContactPage, CourseView, Courses, Dashboard, LessonView, Login, PathView, Paths, QuizRunner, SettingsPage, Updates, Verify } from './pages';
+import { sectionInfo, teamUi } from './teams';
 
 export interface Me { id: string; email: string; name: string; role: string; empId?: string; department?: string; team?: string | null; mustChange: boolean; cats?: string[] }
 interface AuthCtx { user: Me | null; setUser: (u: Me | null) => void; logout: () => Promise<void> }
@@ -35,49 +36,52 @@ function Search() {
 }
 
 function Layout({ children }: { children: ReactNode }) {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const loc = useLocation();
   useEffect(() => setOpen(false), [loc.pathname, loc.search]);
+  // On phones the menu is a drawer: lock page scroll behind it and close it with Escape.
+  useEffect(() => {
+    document.body.style.overflow = open ? 'hidden' : '';
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', k);
+    return () => { window.removeEventListener('keydown', k); document.body.style.overflow = ''; };
+  }, [open]);
+  const ui = teamUi(user?.team);
   const item = (to: string, icon: string, label: string, end = false) => {
     const [path, qs] = to.split('?');
     // Category shortcuts share a path; highlight by query string so only one entry is active.
     const active = qs ? loc.pathname === path && loc.search === '?' + qs
       : path === '/courses' ? loc.pathname.startsWith('/courses') && !loc.search
       : end ? loc.pathname === path : loc.pathname.startsWith(path);
-    return <NavLink to={to} className={'nav' + (active ? ' active' : '')}><span className="ico" aria-hidden>{icon}</span>{label}</NavLink>;
+    return <NavLink to={to} className={'nav' + (active ? ' active' : '')}><span className="ico" aria-hidden>{icon}</span><span className="lbl">{label}</span></NavLink>;
   };
+  const browse = ui.order.filter((c) => !user?.cats || user.cats.includes(c));
   return (
     <div className="shell">
-      <aside className={'side' + (open ? ' open' : '')}>
+      <div className={'scrim' + (open ? ' on' : '')} onClick={() => setOpen(false)} aria-hidden />
+      <aside className={'side' + (open ? ' open' : '')} aria-label="Main menu">
         <div className="panel">
-          <div className="brand"><img src="/logo.png" alt="FundsIndia" /><div><small>Learning Hub</small></div></div>
+          <div className="brand"><img src="/logo.png" alt="FundsIndia" /><div><small>Learning Hub</small></div>
+            <button className="btn sm close-btn" onClick={() => setOpen(false)} aria-label="Close menu">✕</button></div>
           {item('/', '🏠', 'Home', true)}
           {item('/paths', '🧭', 'Learning paths')}
           {item('/courses', '📚', 'Course library')}
           {item('/updates', '📰', 'Market updates')}
-          <div className="sec">Browse</div>
-          {(!user?.cats || user.cats.includes('academy')) && item('/courses?cat=academy', '🌱', 'FundsIndia Academy')}
-          {(!user?.cats || user.cats.includes('nism')) && item('/courses?cat=nism', '🎓', 'NISM certifications')}
-          {(!user?.cats || user.cats.includes('sales')) && item('/courses?cat=sales', '💼', 'Sales & service')}
-          {(!user?.cats || user.cats.includes('tools')) && item('/courses?cat=tools', '🛠️', 'Zoho & Tata Tele')}
-          {(!user?.cats || user.cats.includes('process')) && item('/courses?cat=process', '📑', 'Process documents')}
-          <div className="sec">My space</div>
-          {item('/account', '👤', 'Profile & certificates')}
-        </div>
-        <div className="foot">
-          <b>{user?.name}</b>
-          {user?.team && <div className="small"><span className="badge">{user.team}</span></div>}
-          <div className="small muted" style={{ wordBreak: 'break-all' }}>{user?.email}</div>
-          <button className="btn sm" style={{ marginTop: 10, width: '100%' }} onClick={logout}>Sign out</button>
+          {browse.length > 0 && <div className="sec">Browse</div>}
+          {browse.map((c) => { const i = sectionInfo(c, user?.team); return <span key={c}>{item('/courses?cat=' + c, i.icon, i.label)}</span>; })}
+          <div className="grow" />
+          <div className="sec">Me</div>
+          {item('/contact', '✉️', 'Contact us')}
+          {item('/settings', '⚙️', 'Settings')}
         </div>
       </aside>
       <div className="main">
         <header className="top">
-          <button className="btn sm menu-btn" onClick={() => setOpen(!open)} aria-label="Menu">☰</button>
+          <button className="btn sm menu-btn" onClick={() => setOpen(!open)} aria-label="Open menu" aria-expanded={open}>☰</button>
           <Search />
           <span className="grow" />
-          <Link to="/account" className="badge" style={{ textDecoration: 'none' }}>👤 {user?.name.split(' ')[0]}</Link>
+          <Link to="/settings" className="badge" style={{ textDecoration: 'none' }}>👤 {user?.name.split(' ')[0]}</Link>
         </header>
         <main className="page">{children}</main>
       </div>
@@ -119,7 +123,9 @@ export function App() {
           <Route path="/lessons/:id" element={<LessonView />} />
           <Route path="/quiz/:id" element={<QuizRunner />} />
           <Route path="/updates" element={<Updates />} />
-          <Route path="/account" element={<Account />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/contact" element={<ContactPage />} />
+          <Route path="/account" element={<Navigate to="/settings" replace />} />
           <Route path="/certificate/:id" element={<CertificateView />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -61,8 +61,11 @@ async function logout(c: Ctx, kind: Kind) {
 async function changePassword(c: Ctx, kind: Kind) {
   const b = await c.body();
   const u = c.user!;
+  const lockKeys = [`pw:${u.id}`];
+  await checkLock(c.env, lockKeys); // a stolen session cannot be used to guess the current password
   const row = await c.env.DB.prepare(`SELECT pw_hash FROM users WHERE id = ?`).bind(u.id).first<{ pw_hash: string }>();
-  if (!row || !(await verifyPassword(String(b.current || ''), row.pw_hash))) fail(400, 'Current password is incorrect.');
+  if (!row || !(await verifyPassword(String(b.current || ''), row.pw_hash))) { await recordFail(c.env, lockKeys); fail(400, 'Current password is incorrect.'); }
+  await clearFails(c.env, lockKeys);
   const next = String(b.next || '');
   const problem = passwordProblem(next);
   if (problem) fail(400, problem);

@@ -47,7 +47,12 @@ export const fail = (status: number, message: string): never => {
 
 export const COOKIE = { learner: 'fi_l', admin: 'fi_a' } as const;
 export type Kind = keyof typeof COOKIE;
-const TTL_HOURS: Record<Kind, number> = { learner: 24 * 7, admin: 8 };
+// Learner sessions last one working day, staff sessions one shift.
+const TTL_HOURS: Record<Kind, number> = { learner: 24, admin: 8 };
+const MAX_SESSIONS = 5; // per user and portal; the oldest are signed out
+/** Over HTTPS the cookie uses the __Host- prefix: the browser then refuses it unless it is Secure, Path=/ and has no Domain,
+ *  which stops a sibling sub-domain from planting or overwriting it. Plain-http local development keeps the short name. */
+export const cookieName = (env: Env, kind: Kind) => (env.COOKIE_SECURE === '0' ? '' : '__Host-') + COOKIE[kind];
 
 export function readCookie(req: Request, name: string) {
   const raw = req.headers.get('Cookie') || '';
@@ -61,7 +66,7 @@ export function readCookie(req: Request, name: string) {
 export function cookieHeader(env: Env, kind: Kind, value: string, clear = false) {
   const maxAge = clear ? 0 : TTL_HOURS[kind] * 3600;
   const secure = env.COOKIE_SECURE === '0' ? '' : '; Secure';
-  return `${COOKIE[kind]}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure}`;
+  return `${cookieName(env, kind)}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure}`;
 }
 
 export async function createSession(env: Env, req: Request, userId: string, kind: Kind) {
@@ -73,13 +78,14 @@ export async function createSession(env: Env, req: Request, userId: string, kind
   )
     .bind(hash, userId, kind, expires, req.headers.get('CF-Connecting-IP') || '', (req.headers.get('User-Agent') || '').slice(0, 200))
     .run();
-  // opportunistic cleanup
+  // opportunistic cleanup: expired sessions, and anything beyond the newest MAX_SESSIONS for this user
   await env.DB.prepare(`DELETE FROM sessions WHERE expires_at < ?`).bind(new Date().toISOString()).run();
+  await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? AND kind = ? AND token_hash NOT IN (SELECT token_hash FROM sessions WHERE user_id = ? AND kind = ? ORDER BY created_at DESC, rowid DESC LIMIT ${MAX_SESSIONS})`).bind(userId, kind, userId, kind).run();
   return token;
 }
 
 export async function sessionUser(env: Env, req: Request, kind: Kind): Promise<User | null> {
-  const token = readCookie(req, COOKIE[kind]);
+  const token = readCookie(req, cookieName(env, kind));
   if (!token || token.length < 30) return null;
   const hash = await sha256Hex(token);
   const row = await env.DB.prepare(
@@ -95,7 +101,7 @@ export async function sessionUser(env: Env, req: Request, kind: Kind): Promise<U
 }
 
 export async function destroySession(env: Env, req: Request, kind: Kind) {
-  const token = readCookie(req, COOKIE[kind]);
+  const token = readCookie(req, cookieName(env, kind));
   if (token) await env.DB.prepare(`DELETE FROM sessions WHERE token_hash = ?`).bind(await sha256Hex(token)).run();
 }
 

@@ -5,6 +5,7 @@ import { CATEGORIES, ErrorBox, Markdown, Progress, Spinner, ago, fmtDate, useLoa
 import { Player, thumb } from '../shared/Player';
 import { FlipBook } from '../shared/FlipBook';
 import { useAuth } from './App';
+import { sectionInfo, teamUi } from './teams';
 
 const hrs = (m: number) => (m >= 60 ? `${Math.round((m / 60) * 10) / 10} h` : `${m} min`);
 const kindIcon = (k: string) => (k === 'video' ? '▶' : k === 'link' ? '🔗' : '📄');
@@ -149,7 +150,7 @@ export function Dashboard() {
       <div className="hero">
         <div className="brandbar" />
         <h1>{hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'}, {user?.name.split(' ')[0]} 👋</h1>
-        <p>{s.streak > 1 ? `You're on a ${s.streak}-day learning streak — keep it going!` : 'A little learning every day compounds. Pick up where you left off, or start a learning path.'}</p>
+        <p><b>{teamUi(user?.team).headline}.</b> {teamUi(user?.team).blurb}{s.streak > 1 ? ` You're on a ${s.streak}-day learning streak.` : ''}</p>
         <div className="row wrap" style={{ marginTop: 18 }}>
           {d.data.watching[0] ? <Link className="btn primary" to={'/lessons/' + d.data.watching[0].id}>▶ Resume: {d.data.watching[0].title.slice(0, 46)}</Link> : <Link className="btn primary" to="/paths">🧭 Start a learning path</Link>}
           <Link className="btn" to="/courses">Browse library</Link>
@@ -157,6 +158,8 @@ export function Dashboard() {
       </div>
 
       <div className="grid g4">{tiles.map(([ic, n, l]) => <div key={l} className="card stat"><div className="ic">{ic}</div><div><b>{n}</b><span>{l}</span></div></div>)}</div>
+
+      <FocusCards team={user?.team} courses={cs.data?.courses || []} />
 
       {d.data.watching.length > 0 && (
         <div><h2>Continue watching</h2>
@@ -456,6 +459,7 @@ function DocLibrary({ course, modules, lessons }: { course: any; modules: any[];
           <input style={{ maxWidth: 300 }} placeholder="Search documents…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search documents" />
         </div>
       </div>
+      <FeedbackBox courseId={course.id} />
       {!groups.length && <div className="card muted">No documents match “{q}”.</div>}
       {groups.map(({ m, items }) => (
         <div className="card" key={m.id}>
@@ -484,10 +488,11 @@ function DocPage({ lesson, course, module, prev, next, side }: { lesson: any; co
           <div className="card">
             <div className="row between wrap no-print" style={{ marginBottom: 8 }}>
               <span className="badge">{module ? module.title : course.title}</span>
-              <button className="btn sm" onClick={() => window.print()}>🖨 Print / save as PDF</button>
+              <span className="small muted">Read-only reference</span>
             </div>
             <Markdown text={lesson.body && lesson.body.startsWith('# ') ? lesson.body : `# ${lesson.title}\n\n${lesson.body || ''}`} />
           </div>
+          <FeedbackBox lessonId={lesson.id} />
           <div className="row wrap between no-print">
             {prev ? <Link className="btn" to={'/lessons/' + prev.id}>← {prev.title.length > 38 ? prev.title.slice(0, 38) + '…' : prev.title}</Link> : <span />}
             {next ? <Link className="btn primary" to={'/lessons/' + next.id}>{next.title.length > 38 ? next.title.slice(0, 38) + '…' : next.title} →</Link> : <Link className="btn" to={'/courses/' + course.id}>Back to all documents</Link>}
@@ -566,6 +571,7 @@ export function LessonView() {
             {l.kind === 'link' && l.url && <p><a className="btn primary" href={l.url} target="_blank" rel="noopener noreferrer">Open resource ↗</a></p>}
             {l.body && <div style={{ marginTop: 18 }}><Markdown text={l.kind === 'note' && !l.body.startsWith('# ') ? `# ${l.title}\n\n${l.body}` : l.body} /></div>}
           </div>
+          <FeedbackBox lessonId={l.id} />
           <div className="row wrap between">
             <span className="muted small">Step {position} of {total}</span>
             <div className="row wrap">
@@ -739,17 +745,28 @@ export function Updates() {
 }
 
 /* ------------------------------------------------------------------ Account */
-export function Account() {
-  const { user } = useAuth();
+export function SettingsPage() {
+  const { user, logout } = useAuth();
   const certs = useLoad(() => api.get('/api/certificates'));
   const att = useLoad(() => api.get('/api/attempts'));
+  const ui = teamUi(user?.team);
   return (
     <div className="stack">
-      <h1>Profile & certificates</h1>
+      <h1>Settings</h1>
       <div className="grid g2" style={{ alignItems: 'start' }}>
-        <div className="card"><div className="brandbar" /><h2>{user?.name}</h2><div className="muted">{user?.email}</div>
-          {user?.empId && <div className="small">Employee ID: {user.empId}</div>}{user?.department && <div className="small">Department: {user.department}</div>}{user?.team && <div className="small">Team: <b>{user.team}</b></div>}
-          <div className="alert ok" style={{ marginTop: 16 }}>🔒 Your progress, quiz scores and certificates are private to your account.</div></div>
+        <div className="card">
+          <div className="brandbar" />
+          <h2 style={{ margin: 0 }}>{user?.name}</h2>
+          <div className="muted">{user?.email}</div>
+          <div className="row wrap" style={{ margin: '12px 0' }}>
+            {user?.team && <span className="badge">{user.team}</span>}
+            {user?.empId && <span className="badge m">User ID {user.empId}</span>}
+            {user?.department && <span className="badge m">{user.department}</span>}
+          </div>
+          {user?.team && <div className="small muted"><b>Your team's focus:</b> {ui.blurb}</div>}
+          <div className="alert ok" style={{ marginTop: 16 }}>🔒 Your progress, quiz scores and certificates are private to your account.</div>
+          <button className="btn" style={{ marginTop: 12 }} onClick={logout}>Sign out</button>
+        </div>
         <div className="card"><h2>Change password</h2><PasswordForm /></div>
       </div>
       <div className="card"><h2>Certificates</h2>
@@ -766,6 +783,93 @@ export function Account() {
   );
 }
 
+/* ------------------------------------------------------------------ Team focus, feedback and contact */
+function FocusCards({ team, courses }: { team?: string | null; courses: any[] }) {
+  const ui = teamUi(team);
+  const ids = new Set(courses.map((c: any) => c.id));
+  const cards = ui.focus.filter((f) => (f.course ? ids.has(f.course) : f.cat === 'contact' || courses.some((c: any) => c.category === f.cat)));
+  if (!cards.length) return null;
+  return (
+    <div>
+      <h2>Your focus{team ? ` · ${team}` : ''}</h2>
+      <div className="grid g4">
+        {cards.map((f) => (
+          <Link key={f.title} to={f.course ? '/courses/' + f.course : f.cat === 'contact' ? '/contact' : '/courses?cat=' + f.cat} className="card link flat" style={{ padding: 16 }}>
+            <div style={{ fontSize: 26 }} aria-hidden>{f.icon}</div>
+            <div style={{ fontWeight: 800, margin: '8px 0 4px' }}>{f.title}</div>
+            <div className="muted small">{f.text}</div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** "Was this helpful?" box shown under every lesson, document and course. Feedback goes to the admin portal. */
+export function FeedbackBox({ lessonId, courseId }: { lessonId?: string; courseId?: string }) {
+  const [rating, setRating] = useState(0);
+  const [msg, setMsg] = useState('');
+  const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle');
+  const [err, setErr] = useState('');
+  useEffect(() => { setRating(0); setMsg(''); setState('idle'); setErr(''); }, [lessonId, courseId]);
+  async function send(e: FormEvent) {
+    e.preventDefault();
+    if (!rating) { setErr('Please choose a rating from 1 to 5 stars.'); return; }
+    setErr(''); setState('busy');
+    try { await api.post('/api/feedback', { lessonId, courseId, rating, message: msg }); setState('done'); }
+    catch (x: any) { setErr(x.message); setState('idle'); }
+  }
+  if (state === 'done') return <div className="card no-print"><b>Thank you!</b> <span className="muted">Your feedback has reached the training team.</span></div>;
+  return (
+    <form className="card no-print" onSubmit={send} aria-label="Feedback">
+      <h3 style={{ marginTop: 0 }}>Was this helpful?</h3>
+      <div className="row" role="radiogroup" aria-label="Rating" style={{ gap: 4 }}>
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button type="button" key={n} role="radio" aria-checked={rating === n} aria-label={n + ' star' + (n > 1 ? 's' : '')} onClick={() => setRating(n)}
+            style={{ background: 'none', border: 0, fontSize: 28, cursor: 'pointer', lineHeight: 1, color: n <= rating ? '#f5a524' : 'var(--mut)', padding: 2 }}>{n <= rating ? '★' : '☆'}</button>
+        ))}
+      </div>
+      <textarea rows={3} maxLength={1500} placeholder="Anything unclear, missing or wrong? (optional)" value={msg} onChange={(e) => setMsg(e.target.value)} style={{ marginTop: 10 }} aria-label="Your feedback" />
+      {err && <div className="alert err" role="alert" style={{ marginTop: 8 }}>{err}</div>}
+      <button className="btn primary sm" style={{ marginTop: 10 }} disabled={state === 'busy'}>{state === 'busy' ? 'Sending…' : 'Send feedback'}</button>
+    </form>
+  );
+}
+
+export function ContactPage() {
+  const { user } = useAuth();
+  const [f, setF] = useState({ category: 'issue', subject: '', message: '' });
+  const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle');
+  const [err, setErr] = useState('');
+  const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
+  async function send(e: FormEvent) {
+    e.preventDefault(); setErr(''); setState('busy');
+    try { await api.post('/api/contact', f); setState('done'); setF({ category: 'issue', subject: '', message: '' }); }
+    catch (x: any) { setErr(x.message); setState('idle'); }
+  }
+  return (
+    <div className="stack" style={{ maxWidth: 720 }}>
+      <div><h1>Contact us</h1><p className="muted" style={{ margin: 0 }}>Report a problem, ask for content to be added or corrected, or tell us what would help your team. It goes straight to the admin and training team.</p></div>
+      {state === 'done' && <div className="alert ok" role="status">Thank you — your message has been sent. The team will review it.</div>}
+      <form className="card stack" onSubmit={send}>
+        <div className="muted small">Sending as <b>{user?.name}</b>{user?.team ? ` · ${user.team}` : ''}</div>
+        <div><label className="f" htmlFor="cat">What is this about?</label>
+          <select id="cat" value={f.category} onChange={set('category')}>
+            <option value="issue">A problem with the portal or a video</option>
+            <option value="content">Content is unclear, missing or wrong</option>
+            <option value="access">I cannot see a course I need</option>
+            <option value="suggestion">A suggestion</option>
+            <option value="other">Something else</option>
+          </select></div>
+        <div><label className="f" htmlFor="subj">Subject</label><input id="subj" value={f.subject} onChange={set('subject')} required maxLength={120} /></div>
+        <div><label className="f" htmlFor="msg">Message</label><textarea id="msg" rows={6} value={f.message} onChange={set('message')} required minLength={5} maxLength={2000} /></div>
+        {err && <div className="alert err" role="alert">{err}</div>}
+        <div><button className="btn primary" disabled={state === 'busy'}>{state === 'busy' ? 'Sending…' : 'Send message'}</button></div>
+      </form>
+    </div>
+  );
+}
+
 export function CertificateView() {
   const { id } = useParams();
   const r = useLoad(() => api.get('/api/certificates'));
@@ -774,7 +878,7 @@ export function CertificateView() {
   if (!c) return <ErrorBox error="Certificate not found." />;
   return (
     <div className="stack">
-      <div className="no-print row"><button className="btn primary" onClick={() => window.print()}>🖨 Print / save as PDF</button><Link className="btn" to="/account">Back</Link></div>
+      <div className="no-print row"><Link className="btn" to="/settings">← Back to settings</Link></div>
       <div className="cert">
         <img src="/logo.png" alt="FundsIndia" style={{ height: 56 }} />
         <div style={{ letterSpacing: '.3em', color: '#1d6ff2', marginTop: 24 }}>CERTIFICATE OF COMPLETION</div>
