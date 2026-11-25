@@ -80,6 +80,12 @@ export const COURSES = [
     description: 'Using the cloud-telephony dialer: agent status, click-to-call, dispositions, recordings and troubleshooting.',
     series: [S('PLrW9y48k3aJOtFRGCa4D4B5sfZdt40xJ_', 'Product explainers', 'Tata Tele Business Services', 'English')], links: [{ title: 'Tata Tele Business Services', url: 'https://www.tatatelebusiness.com/' }] },
 
+  // ---- Process documents (visible to every team) ----
+  { id: 'process-mf-support', src: 'process-mf', code: 'MF SUPPORT', title: 'MF customer support', subtitle: 'Customer support · process documents & reply templates', category: 'process', level: 'Customer support', popular: 1,
+    description: 'For every mutual-fund customer-support process: the documents required, the exact steps, turnaround times, where to send documents, and the ready-to-copy customer reply. Bank, KYC, nominee, NRI status, name change, transactions, SIPs and mandates.', series: [], links: [] },
+  { id: 'process-equity-support', src: 'process-eq', code: 'EQUITY SUPPORT', title: 'Equity customer support', subtitle: 'Customer support · process documents & reply templates', category: 'process', level: 'Customer support',
+    description: 'Process documents and reply templates for equity (broking) customer support. Content is added by the Training & Quality team.', series: [], links: [] },
+
   // ---- Foundations ----
   { id: 'markets-basics', src: 'markets', code: 'MARKETS', title: 'Following the Markets', subtitle: 'A daily 5-minute routine', category: 'foundation', level: 'All staff',
     description: 'How to follow market and regulatory changes without noise. Live headlines are on the Market Updates page.', series: [], links: [] },

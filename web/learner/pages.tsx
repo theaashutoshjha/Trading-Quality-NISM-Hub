@@ -12,7 +12,7 @@ const kindIcon = (k: string) => (k === 'video' ? '▶' : k === 'link' ? '🔗' :
 /* ------------------------------------------------------------------ Login */
 export function Login() {
   const { setUser } = useAuth();
-  const TEAMS = ['MF Onboarding', 'MF Digital', 'MF Silver', 'MF Gold', 'MF Platinum', 'Equity Onboarding', 'Equity Regular', 'Customer Support'];
+  const TEAMS = ['MF Onboarding', 'MF Digital', 'MF Silver', 'MF Gold', 'MF Platinum', 'Equity Onboarding', 'Equity Regular', 'Customer Support', 'Training & Quality'];
   const [f, setF] = useState(() => { let team = ''; try { team = localStorage.getItem('fi_team') || ''; } catch { /* private mode */ } return { userId: '', password: '', team }; });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);

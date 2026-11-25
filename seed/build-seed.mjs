@@ -7,7 +7,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { COURSES, MAX_AGE_DAYS } from './catalog.mjs';
 import { buildAcademy } from './fi-academy.mjs';
-import { COMMON, TEAM_ACCESS } from './teams.mjs';
+import { COMMON, PROCESS_COURSES, TEAM_ACCESS } from './teams.mjs';
+import { MF_MODULES } from './data/processDocs.mjs';
+import { EQUITY_PLACEHOLDER_MD, checklistMd, processMd, processOverviewMd } from './processMd.mjs';
 import { PATHS } from './paths.mjs';
 import { EXTRA } from './extra.mjs';
 
@@ -285,6 +287,17 @@ for (const c of COURSES) {
     }
     const neg = rule ? rule.negative : /zero|none|no negative/i.test(wb?.examPattern?.negativeMarking || '') ? 0 : 0.25;
     if (pool.length) addQuiz(mock, rule ? `${c.code} - Final assessment (certificate)` : `${c.code} - Full mock test`, pool, { minutes: rule ? 60 : 120, pass: rule?.pass || wb?.examPattern?.passingPercentage || 60, negative: neg, exam: true });
+  } else if (c.src === 'process-mf') {
+    const start = addModule('Start here');
+    addLesson(start, 'How to use process documents', processOverviewMd(), 3);
+    addLesson(start, 'Document checklist - all processes', checklistMd(), 10);
+    for (const m of MF_MODULES) {
+      const mid = addModule(m.title);
+      for (const p of m.processes) addLesson(mid, p.title, processMd(p, m.title), 4);
+    }
+  } else if (c.src === 'process-eq') {
+    const mid = addModule('Equity process documents');
+    addLesson(mid, 'Equity customer support - templates to be added', EQUITY_PLACEHOLDER_MD, 2);
   } else if (c.src === 'product') {
     for (const m of D.PRODUCT_SCHOOL_MODULES) {
       const mid = addModule(m.name);
@@ -384,6 +397,11 @@ for (const [team, ids] of Object.entries(TEAM_ACCESS)) {
   }
 }
 stmts.push(`INSERT OR IGNORE INTO settings (key,value) VALUES ('team_access_seeded','1');`);
+// Process-document courses: every team can open them (once; admins can change it later in Team access).
+for (const team of Object.keys(TEAM_ACCESS)) for (const id of PROCESS_COURSES) {
+  stmts.push(`INSERT OR IGNORE INTO team_access (team,course_id) SELECT ${q(team)},${q(id)} WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key='team_access_process_seeded') AND EXISTS (SELECT 1 FROM courses WHERE id=${q(id)});`);
+}
+stmts.push(`INSERT OR IGNORE INTO settings (key,value) VALUES ('team_access_process_seeded','1');`);
 
 // ---------- news seed ----------
 const news = [

@@ -1,6 +1,9 @@
 // Default course access per team (course ids from seed/catalog.mjs). These are STARTING defaults, applied once
 // on a fresh database; after that administrators change them under Admin Portal -> Team access, and re-seeding
 // never overwrites those edits.
+// Process-document courses every team can open (applied once, separately, so existing databases pick them up).
+export const PROCESS_COURSES = ['process-mf-support', 'process-equity-support'];
+
 export const COMMON = ['fi-academy', 'product-school', 'compliance', 'markets-basics'];
 
 export const TEAM_ACCESS = {

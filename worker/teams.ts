@@ -10,7 +10,11 @@ export const TEAMS = [
   'Equity Onboarding',
   'Equity Regular',
   'Customer Support',
+  'Training & Quality',
 ] as const;
+
+/** This team can open every course (like staff), whatever is ticked in team_access. */
+export const FULL_ACCESS_TEAM = 'Training & Quality';
 export type Team = (typeof TEAMS)[number];
 
 export const isTeam = (v: unknown): v is Team => typeof v === 'string' && (TEAMS as readonly string[]).includes(v);
@@ -21,7 +25,7 @@ export const isTeam = (v: unknown): v is Team => typeof v === 'string' && (TEAMS
  */
 export async function allowedCourses(c: Ctx): Promise<Set<string> | null> {
   const u = c.user!;
-  if (u.role !== 'learner') return null;
+  if (u.role !== 'learner' || u.team === FULL_ACCESS_TEAM) return null;
   const cached = (c as any)._allowed as Set<string> | undefined;
   if (cached) return cached;
   const set = new Set<string>();

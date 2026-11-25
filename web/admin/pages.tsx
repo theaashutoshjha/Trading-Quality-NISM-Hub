@@ -59,7 +59,7 @@ export function Overview() {
 }
 
 /* ---------- Users ---------- */
-export const TEAMS = ['MF Onboarding', 'MF Digital', 'MF Silver', 'MF Gold', 'MF Platinum', 'Equity Onboarding', 'Equity Regular', 'Customer Support'];
+export const TEAMS = ['MF Onboarding', 'MF Digital', 'MF Silver', 'MF Gold', 'MF Platinum', 'Equity Onboarding', 'Equity Regular', 'Customer Support', 'Training & Quality'];
 const TeamSelect = ({ value, onChange }: { value: string; onChange: (e: any) => void }) => (
   <select value={value} onChange={onChange}><option value="">— no team (cannot sign in) —</option>{TEAMS.map((t) => <option key={t} value={t}>{t}</option>)}</select>
 );
@@ -190,6 +190,7 @@ export function TeamAccessPage() {
   const toggle = (id: string) => { const n = new Set(sel); if (n.has(id)) n.delete(id); else n.add(id); setSel(n); };
   async function save() { try { await api.put('/api/admin/teams/' + encodeURIComponent(team), { courses: [...sel] }); setMsg('Saved ✓ — applies immediately'); r.reload(); setTimeout(() => setMsg(''), 2500); } catch (e: any) { alert(e.message); } }
   const cur = r.data.teams.find((t: any) => t.name === team);
+  const full = !!cur?.full;
   return (
     <div className="stack">
       <div><h1>Team access</h1><p className="muted" style={{ margin: 0 }}>Choose which courses each team can see. Learners sign in with their User ID, password and team; they only ever see the courses ticked here. Admins and trainers see everything.</p></div>
@@ -202,11 +203,12 @@ export function TeamAccessPage() {
             <div className="small muted" style={{ fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.06em' }}>{CATEGORIES[cat] || cat}</div>
             {r.data.courses.filter((c: any) => c.category === cat).map((c: any) => (
               <label key={c.id} className="lesson-row" style={{ cursor: 'pointer' }}>
-                <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} style={{ width: 18, height: 18, flex: 'none' }} />
+                <input type="checkbox" checked={full || sel.has(c.id)} disabled={full} onChange={() => toggle(c.id)} style={{ width: 18, height: 18, flex: 'none' }} />
                 <span className="grow"><b>{c.title}</b> <span className="muted small">{c.code}</span></span>
               </label>))}
           </div>))}
-        <div className="row" style={{ marginTop: 18 }}><button className="btn primary" onClick={save}>Save access for {team}</button><button className="btn" onClick={() => setSel(new Set(r.data.courses.map((c: any) => c.id)))}>Select all</button><button className="btn" onClick={() => setSel(new Set())}>Clear</button>{msg && <span className="badge g">{msg}</span>}</div>
+        {full && <div className="alert ok" style={{ marginTop: 14 }}>{team} always has full access to every course (including courses added later). Nothing to configure.</div>}
+        {!full && <div className="row" style={{ marginTop: 18 }}><button className="btn primary" onClick={save}>Save access for {team}</button><button className="btn" onClick={() => setSel(new Set(r.data.courses.map((c: any) => c.id)))}>Select all</button><button className="btn" onClick={() => setSel(new Set())}>Clear</button>{msg && <span className="badge g">{msg}</span>}</div>}
       </div>
     </div>
   );

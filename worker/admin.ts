@@ -2,7 +2,7 @@
 import { hashPassword, passwordProblem, randomToken } from './security';
 import type { Route } from './router';
 import { fetchPlaylist, oembed } from './youtube';
-import { TEAMS, isTeam } from './teams';
+import { FULL_ACCESS_TEAM, TEAMS, isTeam } from './teams';
 
 const A = 'admin' as const;
 const OWNER = 'admin-only' as const;
@@ -148,7 +148,7 @@ export const adminRoutes: Route[] = [
     const n = new Map(counts.results.map((x) => [x.team, x.n]));
     const unassigned = await db.prepare(`SELECT COUNT(*) n FROM users WHERE role='learner' AND team IS NULL`).first<{ n: number }>();
     return json({
-      teams: TEAMS.map((t) => ({ name: t, learners: n.get(t) || 0, courses: rows.results.filter((r) => r.team === t).map((r) => r.course_id) })),
+      teams: TEAMS.map((t) => ({ name: t, learners: n.get(t) || 0, full: t === FULL_ACCESS_TEAM, courses: t === FULL_ACCESS_TEAM ? courses.results.map((x: any) => x.id) : rows.results.filter((r) => r.team === t).map((r) => r.course_id) })),
       courses: courses.results,
       unassigned: unassigned?.n || 0,
     });
@@ -156,6 +156,7 @@ export const adminRoutes: Route[] = [
   ['PUT', '/api/admin/teams/:team', OWNER, async (c) => {
     const team = c.params[0];
     if (!isTeam(team)) fail(404, 'Unknown team.');
+    if (team === FULL_ACCESS_TEAM) fail(400, `${FULL_ACCESS_TEAM} always has access to every course.`);
     const b = await c.body();
     const ids: string[] = Array.isArray(b.courses) ? [...new Set<string>(b.courses.map(String))].slice(0, 200) : [];
     const db = c.env.DB;

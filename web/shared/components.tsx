@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
@@ -13,7 +13,35 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 
 export function Markdown({ text }: { text: string }) {
   const html = useMemo(() => DOMPurify.sanitize(marked.parse(text || '', { async: false }) as string), [text]);
-  return <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />;
+  const ref = useRef<HTMLDivElement>(null);
+  // Code blocks (e.g. customer reply templates) get a one-click Copy button.
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    root.querySelectorAll('pre').forEach((pre) => {
+      if (pre.parentElement?.classList.contains('copywrap')) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'copywrap';
+      pre.parentNode!.insertBefore(wrap, pre);
+      wrap.appendChild(pre);
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn sm copybtn'; b.textContent = '📋 Copy';
+      b.onclick = async () => {
+        let done = false;
+        try { await navigator.clipboard.writeText(pre.innerText); done = true; } catch { /* fall back below */ }
+        if (!done) {
+          // Older browsers / blocked clipboard API: select the text and use the legacy copy command.
+          const range = document.createRange(); range.selectNodeContents(pre);
+          const sel = window.getSelection(); sel?.removeAllRanges(); sel?.addRange(range);
+          try { done = document.execCommand('copy'); } catch { done = false; }
+        }
+        b.textContent = done ? '✓ Copied' : 'Press Ctrl+C to copy';
+        setTimeout(() => { b.textContent = '📋 Copy'; }, 1800);
+      };
+      wrap.appendChild(b);
+    });
+  }, [html]);
+  return <div className="prose" ref={ref} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 export function Progress({ value, label }: { value: number; label?: string }) {
@@ -84,6 +112,7 @@ export const CATEGORIES: Record<string, string> = {
   nism: 'NISM Certifications',
   sales: 'Sales & Service',
   tools: 'Tools (Zoho, Tata Tele)',
+  process: 'Process documents',
   foundation: 'Foundations & Compliance',
   general: 'General',
 };

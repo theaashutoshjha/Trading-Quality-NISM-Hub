@@ -61,6 +61,7 @@ function Layout({ children }: { children: ReactNode }) {
           {(!user?.cats || user.cats.includes('nism')) && item('/courses?cat=nism', '🎓', 'NISM certifications')}
           {(!user?.cats || user.cats.includes('sales')) && item('/courses?cat=sales', '💼', 'Sales & service')}
           {(!user?.cats || user.cats.includes('tools')) && item('/courses?cat=tools', '🛠️', 'Zoho & Tata Tele')}
+          {(!user?.cats || user.cats.includes('process')) && item('/courses?cat=process', '📑', 'Process documents')}
           <div className="sec">My space</div>
           {item('/account', '👤', 'Profile & certificates')}
         </div>
