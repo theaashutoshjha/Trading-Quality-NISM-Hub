@@ -74,8 +74,12 @@ const insert = (table, row) => {
   if (table === 'questions') qCount[row.quiz_id] = (qCount[row.quiz_id] || 0) + 1;
   const cols = Object.keys(row);
   const pk = PK[table] || ['id'];
-  const set = cols.filter((c) => !pk.includes(c)).map((c) => `${c}=excluded.${c}`).join(',');
-  return `INSERT INTO ${table} (${cols.join(',')}) VALUES (${Object.values(row).map(q).join(',')}) ON CONFLICT(${pk.join(',')}) DO ${set ? `UPDATE SET ${set}` : 'NOTHING'};`;
+  const upd = cols.filter((c) => !pk.includes(c));
+  const set = upd.map((c) => `${c}=excluded.${c}`).join(',');
+  // Only rewrite a row when something actually changed: re-running the seed on unchanged content then writes
+  // (almost) nothing, which keeps us inside Cloudflare D1's daily row-write allowance.
+  const changed = upd.map((c) => `${table}.${c} IS NOT excluded.${c}`).join(' OR ');
+  return `INSERT INTO ${table} (${cols.join(',')}) VALUES (${Object.values(row).map(q).join(',')}) ON CONFLICT(${pk.join(',')}) DO ${set ? `UPDATE SET ${set} WHERE ${changed}` : 'NOTHING'};`;
 };
 const sid = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const list = (a, f = (x) => `- ${x}`) => (a && a.length ? a.map(f).join('\n') : '');
@@ -359,7 +363,7 @@ for (const c of COURSES) {
   courseLessons[cid] = { videoIds: new Set([...lessonIds].filter((x) => x.startsWith(cid + '-v-'))) };
 
   // Update hours estimate:
-  if (stat.minutes) stmts.push(`UPDATE courses SET hours = ${Math.round((stat.minutes / 60) * 10) / 10} WHERE id = ${q(cid)};`);
+  if (stat.minutes) stmts.push(`UPDATE courses SET hours = ${Math.round((stat.minutes / 60) * 10) / 10} WHERE id = ${q(cid)} AND hours IS NOT ${Math.round((stat.minutes / 60) * 10) / 10};`);
 }
 
 // ---------- learning paths ----------

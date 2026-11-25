@@ -52,6 +52,10 @@ export function makeRouter(routes: Route[]) {
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
       console.error('API error', e);
+      // Cloudflare's free D1 plan stops all writes (including sign-in sessions) once the daily write limit is used up.
+      if (/free tier daily row write limit|exceeded D1/i.test(String((e as Error)?.message || e))) {
+        return json({ error: 'The service has reached its daily database limit and is temporarily read-only. Please try again after 5:30 AM IST, or ask your administrator to upgrade the Cloudflare plan.' }, 503);
+      }
       return json({ error: 'Something went wrong. Please try again.' }, 500);
     }
   };
