@@ -103,6 +103,18 @@ function Ring({ pct, size }: { pct: number; size?: number }) {
 }
 
 export function CourseCard({ c }: { c: any }) {
+  if (c.category === 'process') {
+    return (
+      <Link to={'/courses/' + c.id} className="card link">
+        <div className="cover" />
+        <div className="row between"><span className="badge">{c.code}</span><span className="badge m">Reference</span></div>
+        <h3 style={{ marginTop: 12 }}>{c.title}</h3>
+        <div className="muted small" style={{ minHeight: 22 }}>{c.subtitle}</div>
+        <div className="row wrap small muted" style={{ margin: '12px 0' }}><span>📑 {c.lesson_count} documents</span></div>
+        <span className="btn sm primary">Open documents →</span>
+      </Link>
+    );
+  }
   const pct = c.lesson_count ? (c.done / c.lesson_count) * 100 : 0;
   return (
     <Link to={'/courses/' + c.id} className="card link">
@@ -295,6 +307,8 @@ export function CourseView() {
   const practice = quizzes.filter((q: any) => !q.mock);
   const workbookFile = `/workbooks/NISM-Series-${String(course.code).replace(/^NISM\s*/i, '').replace(/\s+/g, '-')}.pdf`;
 
+  if (course.category === 'process') return <DocLibrary course={course} modules={modules} lessons={lessons} />;
+
   const lessonRow = (l: any) => {
     const w = watch.get(l.id);
     return (
@@ -424,6 +438,80 @@ function WorkbookTab({ file, code }: { file: string; code: string }) {
   );
 }
 
+/* ------------------------------------------------------------------ Process documents (plain reference pages) */
+function DocLibrary({ course, modules, lessons }: { course: any; modules: any[]; lessons: any[] }) {
+  const [q, setQ] = useState('');
+  const match = (l: any) => !q.trim() || l.title.toLowerCase().includes(q.trim().toLowerCase());
+  const groups = modules.map((m: any) => ({ m, items: lessons.filter((l: any) => l.module_id === m.id && match(l)) })).filter((g) => g.items.length);
+  return (
+    <div className="stack" style={{ maxWidth: 960 }}>
+      <div className="small muted"><Link to="/courses?cat=process">Process documents</Link> / {course.title}</div>
+      <div className="card">
+        <div className="brandbar" />
+        <h1 style={{ marginTop: 0 }}>{course.title}</h1>
+        <p className="muted" style={{ marginTop: 0 }}>{course.description}</p>
+        <div className="row wrap" style={{ gap: 12 }}>
+          <span className="badge">📑 {lessons.length} documents</span>
+          <span className="grow" />
+          <input style={{ maxWidth: 300 }} placeholder="Search documents…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search documents" />
+        </div>
+      </div>
+      {!groups.length && <div className="card muted">No documents match “{q}”.</div>}
+      {groups.map(({ m, items }) => (
+        <div className="card" key={m.id}>
+          <h2 style={{ marginTop: 0 }}>{m.title}</h2>
+          {items.map((l: any) => (
+            <Link key={l.id} to={'/lessons/' + l.id} className="lesson-row">
+              <span className="kind">📄</span>
+              <span className="grow"><b>{l.title}</b></span>
+              <span className="muted small">Open →</span>
+            </Link>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DocPage({ lesson, course, module, prev, next, side }: { lesson: any; course: any; module: any; prev: any; next: any; side: any }) {
+  const groups: { title: string; items: any[] }[] = [];
+  if (side?.kind === 'course') side.modules.forEach((m: any) => { const items = side.lessons.filter((x: any) => x.module_id === m.id); if (items.length) groups.push({ title: m.title, items }); });
+  return (
+    <div className="stack">
+      <div className="small muted no-print"><Link to="/courses?cat=process">Process documents</Link> / <Link to={'/courses/' + course.id}>{course.title}</Link>{module && <> / {module.title}</>}</div>
+      <div className="lesson-grid">
+        <div className="stack" style={{ minWidth: 0 }}>
+          <div className="card">
+            <div className="row between wrap no-print" style={{ marginBottom: 8 }}>
+              <span className="badge">{module ? module.title : course.title}</span>
+              <button className="btn sm" onClick={() => window.print()}>🖨 Print / save as PDF</button>
+            </div>
+            <Markdown text={lesson.body && lesson.body.startsWith('# ') ? lesson.body : `# ${lesson.title}\n\n${lesson.body || ''}`} />
+          </div>
+          <div className="row wrap between no-print">
+            {prev ? <Link className="btn" to={'/lessons/' + prev.id}>← {prev.title.length > 38 ? prev.title.slice(0, 38) + '…' : prev.title}</Link> : <span />}
+            {next ? <Link className="btn primary" to={'/lessons/' + next.id}>{next.title.length > 38 ? next.title.slice(0, 38) + '…' : next.title} →</Link> : <Link className="btn" to={'/courses/' + course.id}>Back to all documents</Link>}
+          </div>
+        </div>
+        <aside className="card contents no-print" aria-label="Documents">
+          <h3 style={{ padding: '0 10px' }}>{course.title}</h3>
+          {!side && <Spinner />}
+          {groups.map((g) => (
+            <div key={g.title}>
+              <div className="mod">{g.title}</div>
+              {g.items.map((x: any) => (
+                <Link key={x.id} to={'/lessons/' + x.id} className={'lesson-row' + (x.id === lesson.id ? ' cur' : '')}>
+                  <span className="grow small" style={{ fontWeight: x.id === lesson.id ? 700 : 500 }}>{x.title}</span>
+                </Link>
+              ))}
+            </div>
+          ))}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ Lesson */
 export function LessonView() {
   const { id } = useParams();
@@ -438,6 +526,7 @@ export function LessonView() {
   if (r.loading) return <Spinner />;
   if (r.error) return <ErrorBox error={r.error} retry={r.reload} />;
   const { lesson: l, course, module, prev, next, position, total, resume, path } = r.data;
+  if (course.category === 'process') return <DocPage lesson={l} course={course} module={module} prev={prev} next={next} side={side.data} />;
   const q = pathId ? `?path=${pathId}` : '';
 
   async function toggle(go = false) {

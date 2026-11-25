@@ -70,7 +70,7 @@ async function lessonDetail(c: Ctx) {
   const i = sibs.results.findIndex((s) => s.id === l.id);
   const [done, course, mod, vp, path] = await Promise.all([
     db.prepare(`SELECT 1 FROM progress WHERE user_id=? AND lesson_id=?`).bind(uid, l.id).first(),
-    db.prepare(`SELECT id,title,code FROM courses WHERE id=?`).bind(l.course_id).first(),
+    db.prepare(`SELECT id,title,code,category FROM courses WHERE id=?`).bind(l.course_id).first(),
     l.module_id ? db.prepare(`SELECT id,title FROM modules WHERE id=?`).bind(l.module_id).first() : null,
     db.prepare(`SELECT seconds,duration FROM video_progress WHERE user_id=? AND lesson_id=?`).bind(uid, l.id).first<{ seconds: number; duration: number }>(),
     pathId ? db.prepare(`SELECT id,title FROM paths WHERE id=?`).bind(pathId).first() : null,
