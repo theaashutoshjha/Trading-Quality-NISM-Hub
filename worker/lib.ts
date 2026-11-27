@@ -6,6 +6,8 @@ export interface Env {
   ADMIN_PATH: string;
   COOKIE_SECURE?: string;
   SETUP_TOKEN?: string; // wrangler secret
+  RESEND_API_KEY?: string; // optional wrangler secret for server-side NISM audit emails
+  MAIL_FROM?: string; // optional sender address when RESEND_API_KEY is set
 }
 
 export interface User {

@@ -648,4 +648,65 @@ export const adminRoutes: Route[] = [
     await c.env.DB.prepare(`DELETE FROM regulatory_changes WHERE id=?`).bind(c.params[0]).run();
     return json({ ok: true });
   }],
+
+  // ---------- NISM Compliance Email Relay (Resend or Apps Script Webhook fallback) ----------
+  ['POST', '/api/admin/nism-send-mail', A, async (c) => {
+    const b = await c.body();
+    const rawTo = str(b.to, 500);
+    const recipients = rawTo.split(/[,;]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+    if (!recipients.length || recipients.some((e) => !isEmail(e))) fail(400, 'Enter valid recipient email address(es).');
+    const subject = str(b.subject, 240);
+    const htmlBody = typeof b.htmlBody === 'string' ? b.htmlBody.slice(0, 400_000) : '';
+    const plainBody = typeof b.plainBody === 'string' ? b.plainBody.slice(0, 100_000) : '';
+    if (!subject || (!htmlBody && !plainBody)) fail(400, 'Subject and email content are required.');
+
+    if (c.env.RESEND_API_KEY) {
+      const from = c.env.MAIL_FROM || 'FundsIndia Compliance <onboarding@resend.dev>';
+      const r = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${c.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from, to: recipients, subject, html: htmlBody || undefined, text: plainBody || undefined }),
+      });
+      if (!r.ok) {
+        const errText = await r.text().catch(() => '');
+        fail(502, `Resend mail delivery failed (${r.status}): ${errText.slice(0, 300)}`);
+      }
+      await audit(c.env, c.user!.email, 'nism_audit_mail_sent', `via=resend to=${recipients.join(',')}`, c.ip);
+      return json({ ok: true, via: 'resend', to: recipients });
+    }
+
+    let webhookUrl = str(b.webhookUrl, 500);
+    if (!webhookUrl) {
+      const row = await c.env.DB.prepare(`SELECT value FROM system_settings WHERE key='nism_schedule'`).first<{ value: string }>();
+      if (row?.value) {
+        try { webhookUrl = str(JSON.parse(row.value)?.webhookUrl, 500); } catch { /* ignore */ }
+      }
+    }
+    if (!webhookUrl) fail(400, 'No mail webhook configured. Enable Gmail API in Google Cloud Console or configure an Apps Script Mail Webhook.');
+    let parsedUrl: URL;
+    try { parsedUrl = new URL(webhookUrl); } catch { return fail(400, 'Invalid webhook URL.'); }
+    if (parsedUrl.protocol !== 'https:' || /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/i.test(parsedUrl.hostname)) {
+      fail(400, 'Webhook URL must be a public https:// endpoint.');
+    }
+
+    const wr = await fetch(parsedUrl.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event: 'nism_audit_email',
+        to: recipients.join(', '),
+        subject,
+        htmlBody,
+        plainBody,
+        actionedBy: c.user!.email,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+    if (!wr.ok) {
+      const errText = await wr.text().catch(() => '');
+      fail(502, `Webhook mail delivery failed (${wr.status}): ${errText.slice(0, 300)}`);
+    }
+    await audit(c.env, c.user!.email, 'nism_audit_mail_sent', `via=webhook to=${recipients.join(',')}`, c.ip);
+    return json({ ok: true, via: 'webhook', to: recipients });
+  }],
 ];

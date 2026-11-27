@@ -257,7 +257,7 @@ export function UserGuide({ portal, loginCount }: { portal: 'learner' | 'head' |
       items: [
         ['📚 Content & Courses', 'Create courses, import YouTube videos/playlists, edit Markdown notes, and preview drafts before publishing.'],
         ['👥 Users, Heads & Teams', 'Create Learner, Team Head, Trainer, and Admin accounts, manage team access, and revoke/re-issue certificates.'],
-        ['🎓 NISM Certificates (Drive)', 'Connect Google Drive to analyse NISM PDFs, match against your employee directory, and email qaudits@fundsindia.com in one click.'],
+        ['🎓 NISM Certificates (Drive)', 'Connect Google Drive (or upload directly) to analyse NISM PDFs & images with OCR, match against your employee directory, and email qaudits@fundsindia.com in one click.'],
         ['🔐 Security & Audit', 'Enable 2-step verification, view filtered audit logs, clear login lockouts, and customize UI theme colors.'],
       ],
     },
