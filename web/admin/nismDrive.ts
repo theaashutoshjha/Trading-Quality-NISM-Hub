@@ -42,6 +42,11 @@ export interface DriveCertRecord {
   localPreviewUrl?: string;
   passwordProtected?: boolean;
   extractionError?: string;
+  team?: string;
+  empId?: string;
+  email?: string;
+  remarks?: string;
+  expiryInferred?: boolean;
 }
 
 export interface ExpiryInfo {
@@ -79,6 +84,29 @@ export const DEFAULT_GOOGLE_EMAIL = 'ashutosh.kumar@fundsindia.com';
 export const DEFAULT_FOLDER_NAME = 'FundsIndia - NISM Certificates';
 export const DIRECTORY_FILE_NAME = 'nism-employee-directory.json';
 export const ANALYSIS_CACHE_FILE_NAME = 'nism-analysis-data.json';
+export const SHEET_FILE_NAME = 'NISM Compliance Master Sheet';
+
+export const DEFAULT_TEAM_FOLDERS = [
+  'Complaince',
+  'CS',
+  'EQ-OB',
+  'Equity',
+  'Equity Ops',
+  'Gold',
+  'MFD- Ban',
+  'MFD-Che',
+  'OB',
+  'OB-TP',
+  'Platinum',
+  'QA',
+  'Silver',
+];
+
+export interface DriveTeamFolder {
+  id: string;
+  name: string;
+  webViewLink: string;
+}
 
 const CERT_EXT_RE = /\.(pdf|png|jpe?g|webp|bmp|tiff?|gif|jfif|avif)$/i;
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|bmp|tiff?|gif|jfif|avif)$/i;
@@ -424,6 +452,231 @@ export async function saveJsonToDrive(token: string, folderId: string, fileName:
   if (!cr.ok) throw await driveErr(cr, `Failed to save ${fileName} in Drive`);
 }
 
+export async function listDriveTeamFolders(token: string, rootFolderId: string): Promise<DriveTeamFolder[]> {
+  const out: DriveTeamFolder[] = [];
+  let pageToken = '';
+  do {
+    const q = encodeURIComponent(`'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+    const url = `${DRIVE_API}/files?q=${q}&orderBy=name&fields=nextPageToken,files(id,name,webViewLink)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true${pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : ''}`;
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) throw await driveErr(r, 'Failed to list team folders in Drive');
+    const d: any = await r.json();
+    for (const f of (d.files || [])) {
+      out.push({
+        id: String(f.id),
+        name: String(f.name || ''),
+        webViewLink: f.webViewLink || `https://drive.google.com/drive/folders/${f.id}`,
+      });
+    }
+    pageToken = d.nextPageToken || '';
+  } while (pageToken);
+  return out;
+}
+
+export async function ensureDriveSubfolder(token: string, rootFolderId: string, teamName: string): Promise<DriveTeamFolder> {
+  const clean = teamName.trim();
+  if (!clean) throw new Error('Team folder name is required.');
+  const existing = await listDriveTeamFolders(token, rootFolderId);
+  const found = existing.find((f) => f.name.trim().toLowerCase() === clean.toLowerCase());
+  if (found) return found;
+
+  const cr = await fetch(`${DRIVE_API}/files?fields=id,name,webViewLink&supportsAllDrives=true`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: clean,
+      parents: [rootFolderId],
+      mimeType: 'application/vnd.google-apps.folder',
+    }),
+  });
+  if (!cr.ok) throw await driveErr(cr, `Could not create team folder "${clean}" in Drive`);
+  const c: any = await cr.json();
+  return { id: c.id, name: c.name, webViewLink: c.webViewLink || `https://drive.google.com/drive/folders/${c.id}` };
+}
+
+export interface DriveSheetRef {
+  id: string;
+  name: string;
+  webViewLink: string;
+}
+
+export async function findDriveSheet(token: string, rootFolderId: string): Promise<DriveSheetRef | null> {
+  const q = encodeURIComponent(`'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`);
+  const sr = await fetch(`${DRIVE_API}/files?q=${q}&orderBy=modifiedTime desc&fields=files(id,name,webViewLink)&pageSize=10&supportsAllDrives=true&includeItemsFromAllDrives=true`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!sr.ok) return null;
+  const sd: any = await sr.json();
+  const files: any[] = sd.files || [];
+  const match = files.find((f) => String(f.name || '').toLowerCase() === SHEET_FILE_NAME.toLowerCase()) || files[0];
+  if (!match?.id) return null;
+  return {
+    id: String(match.id),
+    name: String(match.name || SHEET_FILE_NAME),
+    webViewLink: match.webViewLink || `https://docs.google.com/spreadsheets/d/${match.id}/edit`,
+  };
+}
+
+export async function syncCertsToDriveSheet(
+  token: string,
+  rootFolderId: string,
+  certs: DriveCertRecord[],
+  missingEmployees: EmployeeEntry[],
+  thresholdDays: number,
+  existingSheetId?: string,
+): Promise<DriveSheetRef> {
+  const csv = buildComplianceCsv(certs, missingEmployees, thresholdDays);
+  const sheetId = existingSheetId || (await findDriveSheet(token, rootFolderId))?.id;
+
+  if (sheetId) {
+    const ur = await fetch(`${DRIVE_UPLOAD}/files/${encodeURIComponent(sheetId)}?uploadType=media&fields=id,name,webViewLink&supportsAllDrives=true`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/csv; charset=UTF-8' },
+      body: csv,
+    });
+    if (ur.ok) {
+      const d: any = await ur.json();
+      return {
+        id: String(d.id || sheetId),
+        name: String(d.name || SHEET_FILE_NAME),
+        webViewLink: d.webViewLink || `https://docs.google.com/spreadsheets/d/${sheetId}/edit`,
+      };
+    }
+  }
+
+  const boundary = `fi_sheet_${Date.now()}`;
+  const meta = JSON.stringify({
+    name: SHEET_FILE_NAME,
+    parents: [rootFolderId],
+    mimeType: 'application/vnd.google-apps.spreadsheet',
+  });
+  const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: text/csv; charset=UTF-8\r\n\r\n${csv}\r\n--${boundary}--`;
+  const cr = await fetch(`${DRIVE_UPLOAD}/files?uploadType=multipart&fields=id,name,webViewLink&supportsAllDrives=true`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  if (!cr.ok) throw await driveErr(cr, 'Failed to create Google Sheet in Drive');
+  const created: any = await cr.json();
+  return {
+    id: String(created.id),
+    name: String(created.name || SHEET_FILE_NAME),
+    webViewLink: created.webViewLink || `https://docs.google.com/spreadsheets/d/${created.id}/edit`,
+  };
+}
+
+function parseCsvRows(csvText: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuotes = false;
+  for (let i = 0; i < csvText.length; i++) {
+    const ch = csvText[i];
+    if (inQuotes) {
+      if (ch === '"' && csvText[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        cell += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(cell);
+      cell = '';
+    } else if (ch === '\r' || ch === '\n') {
+      if (ch === '\r' && csvText[i + 1] === '\n') i++;
+      row.push(cell);
+      if (row.some((c) => c.trim() !== '')) rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += ch;
+    }
+  }
+  row.push(cell);
+  if (row.some((c) => c.trim() !== '')) rows.push(row);
+  return rows;
+}
+
+export async function importCertsFromDriveSheet(token: string, sheetId: string): Promise<DriveCertRecord[]> {
+  const r = await fetch(`${DRIVE_API}/files/${encodeURIComponent(sheetId)}/export?mimeType=text/csv&supportsAllDrives=true`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!r.ok) throw await driveErr(r, 'Failed to read Google Sheet');
+  const csv = await r.text();
+  const rows = parseCsvRows(csv);
+  if (rows.length < 2) return [];
+  const hdr = rows[0].map((h) => h.trim().toLowerCase());
+  const idx = (name: string) => hdr.findIndex((h) => h.includes(name));
+  const iType = idx('record type');
+  const iTeam = idx('team');
+  const iEmpId = idx('employee id');
+  const iName = idx('name');
+  const iEmail = idx('email');
+  const iSeries = idx('nism series');
+  const iCert = idx('certificate #');
+  const iEnrol = idx('enrolment #');
+  const iExamType = idx('exam type');
+  const iExamDate = idx('exam date');
+  const iExpiry = idx('expiry date');
+  const iMarks = hdr.findIndex((h) => h === 'marks');
+  const iTotal = idx('total marks');
+  const iPct = idx('percentage');
+  const iPass = idx('pass status');
+  const iFmt = idx('file format');
+  const iMethod = idx('extraction method');
+  const iConf = idx('confidence');
+  const iFile = idx('file name');
+  const iLink = idx('link');
+  const iRemarks = idx('remarks');
+
+  const out: DriveCertRecord[] = [];
+  for (let rIdx = 1; rIdx < rows.length; rIdx++) {
+    const cols = rows[rIdx];
+    const get = (k: number) => (k >= 0 && k < cols.length ? cols[k].trim() : '');
+    const recType = get(iType).toUpperCase();
+    if (recType === 'MISSING_EMPLOYEE') continue;
+    const holderName = get(iName);
+    if (!holderName) continue;
+    const fileName = get(iFile) || `${holderName}.pdf`;
+    const webViewLink = get(iLink);
+    const idFromLink = webViewLink.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1] || '';
+    const marksObtained = Number(get(iMarks)) || 0;
+    const totalMarks = Number(get(iTotal)) || 100;
+    const percentage = Number(get(iPct)) || (totalMarks > 0 ? Math.round((marksObtained / totalMarks) * 10000) / 100 : 0);
+    const team = get(iTeam);
+    out.push({
+      fileId: idFromLink || `sheet_${rIdx}_${fileName}`,
+      fileName,
+      webViewLink,
+      holderName,
+      team: team || undefined,
+      folderName: team || undefined,
+      empId: get(iEmpId) || undefined,
+      email: get(iEmail) || undefined,
+      nismSeries: get(iSeries) || 'NISM Certification',
+      certificateNumber: get(iCert) || '—',
+      enrolmentNumber: get(iEnrol) || '—',
+      examDate: parseDateIso(get(iExamDate)) || get(iExamDate),
+      expiryDate: parseDateIso(get(iExpiry)) || get(iExpiry),
+      marksObtained,
+      totalMarks,
+      percentage,
+      passStatus: get(iPass).toUpperCase() === 'FAIL' ? 'FAIL' : 'PASS',
+      cpeOrExamType: get(iExamType) || 'Certification Examination',
+      fileType: get(iFmt).toLowerCase() === 'image' ? 'image' : 'pdf',
+      extractionMethod: (get(iMethod) as ExtractionMethod) || 'manual',
+      analysisConfidence: (get(iConf) as AnalysisConfidence) || 'high',
+      remarks: get(iRemarks) || undefined,
+      source: webViewLink ? 'drive' : 'local',
+    });
+  }
+  return out;
+}
+
 /* ---------- PDF & Image Text / OCR Extraction ---------- */
 const MONTHS: Record<string, string> = {
   jan: '01', january: '01', feb: '02', february: '02', mar: '03', march: '03', apr: '04', april: '04',
@@ -438,21 +691,30 @@ export function parseDateIso(input?: string): string {
     .replace(/(\d{1,2})(st|nd|rd|th)\b/gi, '$1')
     .replace(/[,]+/g, ' ')
     .replace(/\s+/g, ' ');
+  const expandYear = (y: number) => (y < 100 ? 2000 + y : y);
   let m = /^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/.exec(s);
   if (m) return validateIsoDate(+m[1], +m[2], +m[3]);
-  m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/.exec(s);
-  if (m) return validateIsoDate(+m[3], +m[2], +m[1]);
-  m = /^(\d{1,2})[\s\-\/.]+([A-Za-z]+)[\s\-\/.]+(\d{4})$/.exec(s);
+  m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2}|\d{4})$/.exec(s);
+  if (m) return validateIsoDate(expandYear(+m[3]), +m[2], +m[1]);
+  m = /^(\d{1,2})[\s\-\/.]+([A-Za-z]+)[\s\-\/.]+(\d{2}|\d{4})$/.exec(s);
   if (m) {
     const mon = MONTHS[m[2].toLowerCase()] || MONTHS[m[2].toLowerCase().slice(0, 3)];
-    if (mon) return validateIsoDate(+m[3], +mon, +m[1]);
+    if (mon) return validateIsoDate(expandYear(+m[3]), +mon, +m[1]);
   }
-  m = /^([A-Za-z]+)[\s\-\/.]+(\d{1,2})[\s\-\/.]+(\d{4})$/.exec(s);
+  m = /^([A-Za-z]+)[\s\-\/.]+(\d{1,2})[\s\-\/.]+(\d{2}|\d{4})$/.exec(s);
   if (m) {
     const mon = MONTHS[m[1].toLowerCase()] || MONTHS[m[1].toLowerCase().slice(0, 3)];
-    if (mon) return validateIsoDate(+m[3], +mon, +m[2]);
+    if (mon) return validateIsoDate(expandYear(+m[3]), +mon, +m[2]);
   }
   return '';
+}
+
+function addYearsMinusOneDay(isoDate: string, years: number): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return '';
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const dt = new Date(Date.UTC(y + years, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  return dt.toISOString().slice(0, 10);
 }
 
 function validateIsoDate(y: number, m: number, d: number): string {
@@ -715,15 +977,16 @@ export function parseNismCertificateText(rawText: string, fileName: string): Omi
 
   // NISM Series
   const seriesMatch =
-    lineText.match(/(NISM[-\s]*Series[-\s]*(?:XXIV|XXIII|XXII|XXI[-\s]*[AB]|XIX[-\s]*[ABC]|XVII|XVI|XV|XIII|XII|X[-\s]*[ABC]|IX|VIII|VII|VI|V[-\s]*[ABCD]|IV|III[-\s]*[AB]|II[-\s]*[AB]|I)\b(?:[^\n]{0,75}))/i) ||
-    clean.match(/(NISM[-\s]*Series[-\s]*[IVX0-9A-Z-]+(?:\s*[:\-]\s*[^.\n]{4,60})?)/i);
+    lineText.match(/(NISM[-\s]*Series[-\s]*(?:XXIV|XXIII|XXII|XXI[-\s]*[AB]|XIX[-\s]*[ABC]|XVII|XVI|XV|XIII|XII|X[-\s]*[ABC]|IX|VIII|VII|VI|V[-\s]*[ABCD]|IV|III[-\s]*[AB]|II[-\s]*[AB]|I)\b(?:[^\n"”]{0,80}))/i) ||
+    clean.match(/(NISM[-\s]*Series[-\s]*[IVX0-9A-Z-]+(?:\s*[:\-]\s*[^.\n"”]{4,60})?)/i);
   let series = seriesMatch?.[1]?.replace(/\s+/g, ' ').trim() || '';
   if (series) {
     series = series
       .replace(/^(NISM)[-\s]*(Series)[-\s]*/i, '$1-$2-')
-      .replace(/\s+(?:Certification\s+Examination|Certificate|Valid|Enrol.*|Test\s+Date.*)$/i, (m) =>
-        /Certification\s+Examination/i.test(m) ? ' Certification Examination' : '',
-      )
+      .replace(/["”']+\s*(?:as\s+requi.*|required\s+under.*)$/i, '')
+      .replace(/\s+as\s+required\s+under.*$/i, '')
+      .replace(/["”']+$/g, '')
+      .replace(/\s+(?:Certificate|Valid|Enrol.*|Test\s+Date.*)$/i, '')
       .trim();
   }
   const hasExplicitSeries = Boolean(series);
@@ -735,8 +998,8 @@ export function parseNismCertificateText(rawText: string, fileName: string): Omi
   // Holder Name
   let holderName = '';
   const namePatterns = [
-    /This\s+is\s+to\s+certify\s+that\s+(?:Mr\.?|Ms\.?|Mrs\.?|Shri\.?|Smt\.?|Dr\.?)?\s*([A-Za-z][A-Za-z\s.]{2,60}?)(?=\s+(?:has|bearing|having|Enrol|Registration|PAN|S\/O|D\/O|W\/O|NISM|successfully|cleared|passed|completed))/i,
-    /(?:Candidate\s*Name|Name\s*of\s*(?:the\s*)?(?:Candidate|Participant|Holder|Examinee))\s*[:\-]?\s*(?:Mr\.?|Ms\.?|Mrs\.?|Shri\.?)?\s*([A-Za-z][A-Za-z\s.]{2,60}?)(?=\s*(?:\n|Enrol|Reg|Certificate|NISM|Date|Marks|PAN|Father))/i,
+    /This\s+is\s+to\s+certify\s+that\s+(?:Mr\.?|Ms\.?|Mrs\.?|Shri\.?|Smt\.?|Dr\.?)?\s*([A-Za-z][A-Za-z\s.]{2,60}?)(?=\s*(?:\(|has|bearing|having|Enrol|Registration|PAN|S\/O|D\/O|W\/O|NISM|successfully|cleared|passed|completed))/i,
+    /(?:Candidate\s*Name|Name\s*of\s*(?:the\s*)?(?:Candidate|Participant|Holder|Examinee))\s*[:\-]?\s*(?:Mr\.?|Ms\.?|Mrs\.?|Shri\.?)?\s*([A-Za-z][A-Za-z\s.]{2,60}?)(?=\s*(?:\n|\(|Enrol|Reg|Certificate|NISM|Date|Marks|PAN|Father))/i,
     /(?:Awarded\s+to|Presented\s+to)\s+(?:Mr\.?|Ms\.?|Mrs\.?)?\s*([A-Za-z][A-Za-z\s.]{2,60}?)(?=\s*(?:\n|has|for|NISM|Certificate))/i,
   ];
   for (const re of namePatterns) {
@@ -754,12 +1017,40 @@ export function parseNismCertificateText(rawText: string, fileName: string): Omi
     holderName = fileName.replace(CERT_EXT_RE, '').replace(/[_-]+/g, ' ').trim();
   }
 
-  // Dates
-  const dateTok = '(?:\\d{1,2}(?:st|nd|rd|th)?[\\s\\-\\/.]+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*[.,]?[\\s\\-\\/.]+\\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*[.,]?[\\s\\-\\/.]+\\d{1,2}(?:st|nd|rd|th)?[.,]?[\\s\\-\\/.]+\\d{4}|\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{4}|\\d{4}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{1,2})';
-  const examRaw = clean.match(new RegExp(`(?:Test\\s*Date|Exam(?:ination)?\\s*Date|Date\\s+of\\s+(?:Exam(?:ination)?|Test|Passing|Issue)|CPE\\s*(?:Program\\s*)?Date|Issue\\s*Date)\\s*[:\\-;]?\\s*(${dateTok})`, 'i'))?.[1] || '';
-  const expRaw = clean.match(new RegExp(`(?:Valid\\s*(?:Till|Til|Upto|Up\\s*to|Through)|Validity(?:\\s*(?:Date|Till|Upto|of\\s+Certificate))?|Expiry\\s*Date)\\s*[:\\-;]?\\s*(${dateTok})`, 'i'))?.[1] || '';
+  // Dates (supports DD-MMM-YYYY, Month DD, YYYY, DD/MM/YYYY, YYYY-MM-DD, 2-digit years, prose, & multi-line PDF tables)
+  const monPat = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
+  const dateTok = `(?:\\d{1,2}(?:st|nd|rd|th)?[\\s\\-\\/.,]+${monPat}[.,]?[\\s\\-\\/.,]+\\d{2,4}|${monPat}[.,]?[\\s\\-\\/.]+\\d{1,2}(?:st|nd|rd|th)?[.,]?[\\s\\-\\/.,]+\\d{2,4}|\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{2,4}|\\d{4}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{1,2})`;
+
+  const validRangeM = clean.match(new RegExp(`(?:Valid\\s+from|Validity\\s*(?:Period)?\\s*[:\\-]?)\\s*(${dateTok})\\s*(?:to|till|until|\\-)\\s*(${dateTok})`, 'i'));
+  const examRaw =
+    validRangeM?.[1] ||
+    clean.match(new RegExp(`(?:Test\\s*Date|Exam(?:ination)?\\s*Date|Date\\s+of\\s+(?:Exam(?:ination)?|Test|Passing|Issue|Completion)|CPE\\s*(?:Program\\s*)?Date|Issue\\s*Date|Program\\s*Date)\\s*[:\\-;]?\\s*(${dateTok})`, 'i'))?.[1] ||
+    clean.match(new RegExp(`(?:held|conducted|passed|completed|issued|dated)\\s+on\\s*(${dateTok})`, 'i'))?.[1] ||
+    '';
+  const expRaw =
+    validRangeM?.[2] ||
+    clean.match(new RegExp(`(?:Valid\\s*(?:Till|Til|Upto|Up\\s*to|Until|Through)|Validity(?:\\s*(?:Date|Till|Upto|Up\\s*to|of\\s+Certificate))?|Expiry\\s*Date|Expires\\s*on)\\s*[:\\-;]?\\s*(${dateTok})`, 'i'))?.[1] ||
+    '';
   let examDate = parseDateIso(examRaw);
   let expiryDate = parseDateIso(expRaw);
+  let expiryInferred = false;
+
+  // Multi-line table header fallback (PDF tables often emit headers on line N and dates on line N+1 or N+2)
+  if (!examDate || !expiryDate) {
+    const lines = lineText.split('\n').map((l) => l.trim()).filter(Boolean);
+    for (let li = 0; li < lines.length; li++) {
+      const hdr = lines[li];
+      const lookahead = [lines[li + 1] || '', lines[li + 2] || ''].join(' ');
+      if (!examDate && /(?:Test\s*Date|Exam(?:ination)?\s*Date|Date\s+of\s+(?:Exam|Test|Passing|Issue))/i.test(hdr)) {
+        const d = (lookahead.match(new RegExp(dateTok, 'gi')) || []).map(parseDateIso).find(Boolean);
+        if (d) examDate = d;
+      }
+      if (!expiryDate && /(?:Valid\s*(?:Till|Til|Upto|Up\s*to)|Validity|Expiry)/i.test(hdr)) {
+        const datesInNext = (lookahead.match(new RegExp(dateTok, 'gi')) || []).map(parseDateIso).filter(Boolean);
+        if (datesInNext.length) expiryDate = datesInNext[datesInNext.length - 1];
+      }
+    }
+  }
 
   if (!examDate || !expiryDate) {
     const allDates = Array.from(new Set((clean.match(new RegExp(dateTok, 'gi')) || []).map(parseDateIso).filter(Boolean))).sort();
@@ -770,21 +1061,37 @@ export function parseNismCertificateText(rawText: string, fileName: string): Omi
     }
   }
 
+  // NISM standard 3-year validity rule when certificate states "three years" / "3 years" and only examDate is printed
+  if (examDate && !expiryDate && /(?:valid\s+for\s+(?:a\s+period\s+of\s+)?(?:three|3)\s+years|validity\s*[:\-]?\s*(?:three|3)\s+years|(?:three|3)\s+years\s+from\s+the\s+date)/i.test(clean)) {
+    expiryDate = addYearsMinusOneDay(examDate, 3);
+    expiryInferred = Boolean(expiryDate);
+  }
+
   // Marks & Percentage
   let marksObtained = 0, totalMarks = 100, percentage = 0;
   const scoreM =
     clean.match(/(?:Marks\s*(?:Obtained|Scored)|Total\s*Marks|Score)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:out\s+of|\/)\s*(\d+(?:\.\d+)?)/i) ||
-    clean.match(/(\d+(?:\.\d+)?)\s*(?:out\s+of|\/)\s*(100|50|60|120|150)\b/i);
+    clean.match(/(\d+(?:\.\d+)?)\s*(?:out\s+of|\/)\s*(100|50|60|80|120|150|200)\b/i);
   if (scoreM) {
     marksObtained = Number(scoreM[1]);
     totalMarks = Number(scoreM[2]) || 100;
     percentage = totalMarks > 0 ? Math.round((marksObtained / totalMarks) * 10000) / 100 : 0;
   } else {
-    const pctM = clean.match(/(?:Percentage|Score|Marks)\s*[:\-]?\s*(\d{1,3}(?:\.\d{1,2})?)\s*%/i);
-    if (pctM) {
-      percentage = Number(pctM[1]);
-      marksObtained = percentage;
-      totalMarks = 100;
+    const obtM = clean.match(/(?:Marks\s*(?:Obtained|Scored)|Scored)\s*[:\-]?\s*(\d+(?:\.\d+)?)\b/i);
+    const maxM = clean.match(/(?:Maximum\s*Marks|Max\.?\s*Marks|Out\s+of)\s*[:\-]?\s*(\d+(?:\.\d+)?)\b/i);
+    if (obtM) {
+      marksObtained = Number(obtM[1]);
+      totalMarks = maxM ? Number(maxM[1]) || 100 : 100;
+      percentage = totalMarks > 0 ? Math.round((marksObtained / totalMarks) * 10000) / 100 : 0;
+    } else {
+      const pctM =
+        clean.match(/(?:Percentage|Score|Marks|Secured|Result)\s*[:\-]?\s*(\d{1,3}(?:\.\d{1,2})?)\s*%/i) ||
+        clean.match(/(\d{2,3}(?:\.\d{1,2})?)\s*%\s*(?:marks|score|pass)/i);
+      if (pctM) {
+        percentage = Number(pctM[1]);
+        marksObtained = percentage;
+        totalMarks = 100;
+      }
     }
   }
 
@@ -807,6 +1114,7 @@ export function parseNismCertificateText(rawText: string, fileName: string): Omi
     passStatus,
     cpeOrExamType: isCpe ? 'CPE' : 'Certification Examination',
     analysisConfidence,
+    ...(expiryInferred ? { expiryInferred: true } : {}),
   };
 }
 
@@ -830,13 +1138,16 @@ export function matchCertificatesWithDirectory(certs: DriveCertRecord[], directo
       const en = normName(emp.name);
       const eid = emp.empId.trim().toLowerCase();
       const emailUser = emp.email.split('@')[0]?.toLowerCase().replace(/[^a-z0-9]/g, '') || '';
+      if (c.empId && eid && c.empId.trim().toLowerCase() === eid) return true;
+      if (c.email && emp.email && c.email.trim().toLowerCase() === emp.email.trim().toLowerCase()) return true;
       if (eid && (c.fileName.toLowerCase().includes(eid) || c.holderName.toLowerCase().includes(eid) || (c.rawTextSnippet || '').toLowerCase().includes(eid))) return true;
       if (en && (cn === en || cn.includes(en) || en.includes(cn) || fn.includes(en))) return true;
       if (emailUser.length >= 4 && fn.replace(/\s+/g, '').includes(emailUser)) return true;
       return false;
     }) || null;
     if (match) matchedEmpKeys.add((match.empId || match.email || match.name).toLowerCase());
-    return { ...c, matchedEmployee: match };
+    const team = c.team || (c.folderName ? c.folderName.split('/')[0].trim() : '') || match?.department || '';
+    return { ...c, team: team || undefined, matchedEmployee: match };
   });
 
   const missingEmployees = directory.filter(
@@ -884,10 +1195,13 @@ export function buildAuditEmail(params: {
     const sourceCell = c.webViewLink && /^https?:\/\//.test(c.webViewLink)
       ? `<a href="${esc(c.webViewLink)}" target="_blank" style="color:#1d4ed8;font-weight:600;">${linkLabel}</a><div style="font-size:11px;color:#64748b;">${esc(c.fileName)}</div>`
       : `<span style="font-weight:600;color:#475569;">Uploaded (${c.fileType === 'image' ? 'Image' : 'PDF'})</span><div style="font-size:11px;color:#64748b;">${esc(c.fileName)}</div>`;
+    const empEmail = emp?.email || c.email || '';
+    const empId = emp?.empId || c.empId || '';
+    const teamLabel = c.team || c.folderName || emp?.department || '—';
     return `<tr style="background-color:${bg};">
-      <td style="${td}font-weight:600;">${esc(emp?.name || c.holderName)}${emp?.empId ? `<div style="font-size:11px;color:#475569;font-weight:400;">ID: ${esc(emp.empId)}</div>` : ''}</td>
-      <td style="${td}">${emp?.email ? `<a href="mailto:${esc(emp.email)}" style="color:#1d4ed8;">${esc(emp.email)}</a>` : '—'}</td>
-      <td style="${td}">${esc(emp?.department || c.folderName || '—')}</td>
+      <td style="${td}font-weight:600;">${esc(emp?.name || c.holderName)}${empId ? `<div style="font-size:11px;color:#475569;font-weight:400;">ID: ${esc(empId)}</div>` : ''}</td>
+      <td style="${td}">${empEmail ? `<a href="mailto:${esc(empEmail)}" style="color:#1d4ed8;">${esc(empEmail)}</a>` : '—'}</td>
+      <td style="${td}">${esc(teamLabel)}</td>
       <td style="${td}">${esc(c.nismSeries)}</td>
       <td style="${td}font-family:monospace;">${esc(c.certificateNumber)}</td>
       <td style="${td}font-family:monospace;">${esc(c.enrolmentNumber)}</td>
@@ -1013,21 +1327,23 @@ export function buildGmailComposeUrl(params: { to: string; subject: string; body
 export function buildComplianceCsv(certs: DriveCertRecord[], missingEmployees: EmployeeEntry[], thresholdDays: number): string {
   const csvEsc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const headers = [
-    'Record Type', 'Employee ID', 'Name', 'Email', 'Department / Folder', 'NISM Series',
+    'Record Type', 'Team', 'Employee ID', 'Name', 'Email', 'Department / Folder', 'NISM Series',
     'Certificate #', 'Enrolment #', 'Exam Type', 'Exam Date', 'Expiry Date',
     'Compliance Status', 'Marks', 'Total Marks', 'Percentage', 'Pass Status',
-    'File Format', 'Extraction Method', 'Confidence', 'File Name', 'Link',
+    'File Format', 'Extraction Method', 'Confidence', 'File Name', 'Link', 'Remarks',
   ];
   const rows: string[] = [headers.map(csvEsc).join(',')];
 
   for (const c of certs) {
     const inf = getExpiryInfo(c.expiryDate, thresholdDays);
+    const team = c.team || (c.folderName ? c.folderName.split('/')[0].trim() : '') || c.matchedEmployee?.department || '';
     rows.push([
       'CERTIFICATE',
-      c.matchedEmployee?.empId || '',
+      team,
+      c.matchedEmployee?.empId || c.empId || '',
       c.matchedEmployee?.name || c.holderName,
-      c.matchedEmployee?.email || '',
-      c.matchedEmployee?.department || c.folderName || '',
+      c.matchedEmployee?.email || c.email || '',
+      c.matchedEmployee?.department || c.folderName || team,
       c.nismSeries,
       c.certificateNumber,
       c.enrolmentNumber,
@@ -1044,19 +1360,21 @@ export function buildComplianceCsv(certs: DriveCertRecord[], missingEmployees: E
       c.analysisConfidence || 'medium',
       c.fileName,
       c.webViewLink || '',
+      c.remarks || '',
     ].map(csvEsc).join(','));
   }
 
   for (const e of missingEmployees) {
     rows.push([
       'MISSING_EMPLOYEE',
+      e.department,
       e.empId,
       e.name,
       e.email,
       e.department,
       '', '', '', '', '', '',
       'MISSING / NOT UPLOADED',
-      '', '', '', '', '', '', '', '', '',
+      '', '', '', '', '', '', '', '', '', '',
     ].map(csvEsc).join(','));
   }
 
