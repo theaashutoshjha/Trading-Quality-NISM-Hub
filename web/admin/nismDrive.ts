@@ -452,6 +452,15 @@ export async function saveJsonToDrive(token: string, folderId: string, fileName:
   if (!cr.ok) throw await driveErr(cr, `Failed to save ${fileName} in Drive`);
 }
 
+export async function trashDriveFile(token: string, fileId: string): Promise<void> {
+  const r = await fetch(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trashed: true }),
+  });
+  if (!r.ok && r.status !== 404) throw await driveErr(r, 'Could not move file to Drive Trash');
+}
+
 export async function listDriveTeamFolders(token: string, rootFolderId: string): Promise<DriveTeamFolder[]> {
   const out: DriveTeamFolder[] = [];
   let pageToken = '';

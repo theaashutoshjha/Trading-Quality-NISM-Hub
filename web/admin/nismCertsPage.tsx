@@ -37,6 +37,7 @@ import {
   saveJsonToDrive,
   sendEmailViaGmail,
   syncCertsToDriveSheet,
+  trashDriveFile,
   uploadCertificateToDrive,
 } from './nismDrive';
 
@@ -144,18 +145,56 @@ export function NismCertsPage() {
     try {
       const fld = await resolveOrCreateFolder(tok, fldInput);
       setFolder(fld);
-      const [savedDir, savedCerts, subfolders, sheetRef] = await Promise.all([
+      const [savedDir, savedCerts, subfolders, sheetRef, liveFiles] = await Promise.all([
         loadJsonFromDrive<EmployeeEntry[]>(tok, fld.id, DIRECTORY_FILE_NAME),
         loadJsonFromDrive<DriveCertRecord[]>(tok, fld.id, ANALYSIS_CACHE_FILE_NAME),
         listDriveTeamFolders(tok, fld.id).catch(() => []),
         findDriveSheet(tok, fld.id).catch(() => null),
+        listDriveCertificates(tok, fld.id).catch(() => null),
       ]);
       if (Array.isArray(savedDir) && savedDir.length) setDirectory(savedDir);
-      if (Array.isArray(savedCerts) && savedCerts.length) setCerts(savedCerts);
+
+      let activeCerts = Array.isArray(savedCerts) ? savedCerts : [];
+      let prunedCount = 0;
+      let newInDriveCount = 0;
+      if (liveFiles) {
+        const liveById = new Map(liveFiles.map((f) => [f.id, f]));
+        const before = activeCerts.length;
+        // Remove entries whose Drive PDF/image was deleted/trashed in Google Drive
+        activeCerts = activeCerts
+          .filter((c) => {
+            const isManualOrLocal = c.fileId.startsWith('manual_') || c.fileId.startsWith('local_') || c.source === 'local';
+            return isManualOrLocal || liveById.has(c.fileId);
+          })
+          .map((c) => {
+            const lf = liveById.get(c.fileId);
+            if (!lf) return c;
+            const folderTeam = lf.folderName ? lf.folderName.split('/')[0].trim() : '';
+            return {
+              ...c,
+              fileName: lf.name,
+              webViewLink: lf.webViewLink,
+              folderName: lf.folderName || c.folderName,
+              team: folderTeam || c.team,
+            };
+          });
+        prunedCount = before - activeCerts.length;
+        const cachedIds = new Set(activeCerts.map((c) => c.fileId));
+        newInDriveCount = liveFiles.filter((f) => !cachedIds.has(f.id)).length;
+        if (prunedCount > 0) {
+          await saveJsonToDrive(tok, fld.id, ANALYSIS_CACHE_FILE_NAME, activeCerts).catch(() => {});
+        }
+      }
+
+      setCerts(activeCerts);
       setDriveTeamFolders(subfolders);
       setDriveSheet(sheetRef);
+      const extraNotes = [
+        prunedCount ? `removed ${prunedCount} deleted file(s)` : '',
+        newInDriveCount ? `${newInDriveCount} new file(s) in Drive ready to scan` : '',
+      ].filter(Boolean).join(' · ');
       setMsg(
-        `Connected to Drive "${fld.name}" (${subfolders.length} team folder(s)). Loaded ${savedCerts?.length || 0} certificate(s) and ${savedDir?.length || 0} employee(s).`,
+        `Connected to Drive "${fld.name}" (${subfolders.length} team folder(s)). Loaded ${activeCerts.length} certificate(s) and ${savedDir?.length || 0} employee(s)${extraNotes ? ` (${extraNotes})` : ''}.`,
       );
     } catch (e: any) {
       setFolder(null);
@@ -841,6 +880,18 @@ export function NismCertsPage() {
   }
 
   async function removeCert(c: DriveCertRecord) {
+    const isDriveBacked = Boolean(
+      token && folder && c.source !== 'local' && !c.fileId.startsWith('manual_') && !c.fileId.startsWith('local_') && !c.fileId.startsWith('sheet_'),
+    );
+    if (isDriveBacked) {
+      if (!confirm(`Remove "${c.fileName}" from the portal and move it to Trash in Google Drive?`)) return;
+      try {
+        await trashDriveFile(token, c.fileId);
+      } catch (e: any) {
+        setErr(e?.message || 'Could not trash file in Google Drive.');
+        return;
+      }
+    }
     if (c.localPreviewUrl) URL.revokeObjectURL(c.localPreviewUrl);
     const updated = certs.filter((x) => x.fileId !== c.fileId);
     setCerts(updated);
@@ -852,6 +903,7 @@ export function NismCertsPage() {
     if (token && folder) {
       await persistAllToDrive(updated).catch(() => {});
     }
+    setMsg(`Removed "${c.fileName}"${isDriveBacked ? ' and moved Drive file to Trash' : ''}.`);
   }
 
   function addBlankSheetRow() {
@@ -902,6 +954,16 @@ export function NismCertsPage() {
 
   async function removeSelectedRows() {
     if (!selectedIds.size) return;
+    const toRemove = certs.filter((c) => selectedIds.has(c.fileId));
+    const driveFiles = toRemove.filter(
+      (c) => token && folder && c.source !== 'local' && !c.fileId.startsWith('manual_') && !c.fileId.startsWith('local_') && !c.fileId.startsWith('sheet_'),
+    );
+    if (driveFiles.length > 0 && !confirm(`Remove ${toRemove.length} selected row(s) and move ${driveFiles.length} file(s) to Trash in Google Drive?`)) {
+      return;
+    }
+    for (const df of driveFiles) {
+      await trashDriveFile(token, df.fileId).catch(() => {});
+    }
     const updated = certs.filter((c) => {
       if (selectedIds.has(c.fileId)) {
         if (c.localPreviewUrl) URL.revokeObjectURL(c.localPreviewUrl);
@@ -914,7 +976,7 @@ export function NismCertsPage() {
     if (token && folder) {
       await persistAllToDrive(updated).catch(() => {});
     }
-    setMsg('Removed selected row(s) from the Master Sheet.');
+    setMsg(`Removed ${toRemove.length} selected row(s)${driveFiles.length ? ` and moved ${driveFiles.length} Drive file(s) to Trash` : ''}.`);
   }
 
   const showApiDiagnostic = Boolean(driveApiErr?.reason === 'SERVICE_DISABLED' || gmailApiErr?.reason === 'SERVICE_DISABLED');
