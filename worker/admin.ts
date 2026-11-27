@@ -589,9 +589,10 @@ export const adminRoutes: Route[] = [
     }
     return json({ settings: out });
   }],
-  ['PUT', '/api/admin/settings/:key', OWNER, async (c) => {
+  ['PUT', '/api/admin/settings/:key', A, async (c) => {
     const key = c.params[0];
     if (!['cert_branding', 'banner', 'nism_schedule'].includes(key)) fail(400, 'Unknown setting key.');
+    if (key !== 'nism_schedule' && c.user!.role !== 'admin') fail(403, 'Administrator access required.');
     const b = await c.body();
     await c.env.DB.prepare(
       `INSERT INTO system_settings (key,value,updated_at) VALUES (?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')`,

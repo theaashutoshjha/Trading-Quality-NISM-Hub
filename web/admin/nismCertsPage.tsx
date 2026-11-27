@@ -40,7 +40,7 @@ const SS_TOKEN = 'fi_google_token_cache';
 const APPS_SCRIPT_SNIPPET = `function doPost(e) {
   var data = JSON.parse(e.postData.contents);
   MailApp.sendEmail({
-    to: data.to || 'qaudits@fundsindia.com',
+    to: data.to || data.recipient || 'qaudits@fundsindia.com',
     subject: data.subject || 'NISM Compliance Alert',
     body: data.plainBody || '',
     htmlBody: data.htmlBody || undefined
@@ -156,9 +156,14 @@ export function NismCertsPage() {
   }, []); // eslint-disable-line
 
   async function saveSchedule() {
-    await api.put('/api/admin/settings/nism_schedule', sched).catch(() => {});
-    setSchedSaved('Schedule saved ✓');
-    setTimeout(() => setSchedSaved(''), 2500);
+    setErr('');
+    try {
+      await api.put('/api/admin/settings/nism_schedule', sched);
+      setSchedSaved('Schedule saved ✓');
+      setTimeout(() => setSchedSaved(''), 2500);
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to save schedule & webhook.');
+    }
   }
 
   const matched = useMemo(() => matchCertificatesWithDirectory(certs, directory), [certs, directory]);
@@ -304,7 +309,13 @@ export function NismCertsPage() {
       await saveJsonToDrive(token, folder.id, ANALYSIS_CACHE_FILE_NAME, out);
       setMsg(`Analysed ${out.length} certificate(s) (${out.filter((x) => x.fileType === 'pdf').length} PDF, ${out.filter((x) => x.fileType === 'image').length} Image) from Google Drive and saved metadata to "${ANALYSIS_CACHE_FILE_NAME}".`);
     } catch (e: any) {
-      if (e instanceof GoogleApiError && e.details.reason === 'SERVICE_DISABLED') setDriveApiErr(e.details);
+      if (e instanceof GoogleApiError) {
+        if (e.details.reason === 'SERVICE_DISABLED') setDriveApiErr(e.details);
+        else if (e.details.reason === 'UNAUTHENTICATED') {
+          setToken(''); setFolder(null);
+          try { sessionStorage.removeItem(SS_TOKEN); } catch { /* ignore */ }
+        }
+      }
       setErr(e.message || 'Failed to analyse Drive certificates.');
     } finally {
       setBusy('');
@@ -479,6 +490,11 @@ export function NismCertsPage() {
           setMsg(`Audit email sent via Gmail API to ${payload.to} (${expiringOrExpired.length} expiring/expired · ${matched.missingEmployees.length} missing).`);
           return;
         } catch (e: any) {
+          if (e instanceof GoogleApiError && e.details.reason === 'UNAUTHENTICATED') {
+            setToken(''); setFolder(null);
+            try { sessionStorage.removeItem(SS_TOKEN); } catch { /* ignore */ }
+            throw e;
+          }
           if (e instanceof GoogleApiError && e.details.reason === 'SERVICE_DISABLED') {
             setGmailApiErr(e.details);
             // Fall through to webhook / server relay if available
@@ -950,7 +966,9 @@ export function NismCertsPage() {
                         <td>
                           <div className="row" style={{ gap: 6 }}>
                             <button className="btn sm" onClick={() => setEditingCert({ ...c })} title="Edit parsed details">Edit</button>
-                            <button className="btn sm" onClick={() => setInspectCert(c)} title="Inspect extracted OCR / PDF text">Text</button>
+                            <button className="btn sm" onClick={() => setInspectCert(c)} title="Inspect extracted OCR / PDF text and image preview">
+                              {c.localPreviewUrl ? 'Preview' : 'Text'}
+                            </button>
                             {c.webViewLink && (
                               <a className="btn sm" href={c.webViewLink} target="_blank" rel="noopener noreferrer">View</a>
                             )}

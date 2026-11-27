@@ -305,26 +305,28 @@ export async function listDriveCertificates(token: string, folderId: string): Pr
     let pageToken = '';
     do {
       const q = encodeURIComponent(`'${cur.id}' in parents and trashed=false`);
-      const url = `${DRIVE_API}/files?q=${q}&orderBy=modifiedTime desc&fields=nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true${pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : ''}`;
+      const url = `${DRIVE_API}/files?q=${q}&orderBy=modifiedTime desc&fields=nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,shortcutDetails(targetId,targetMimeType))&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true${pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : ''}`;
       const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!r.ok) throw await driveErr(r, 'Failed to list certificates in Drive folder');
       const d: any = await r.json();
       for (const f of (d.files || [])) {
         const fname = String(f.name || '');
-        const mt = String(f.mimeType || '');
+        const isShortcut = f.mimeType === 'application/vnd.google-apps.shortcut' && f.shortcutDetails?.targetId;
+        const targetId = isShortcut ? String(f.shortcutDetails.targetId) : String(f.id);
+        const mt = isShortcut ? String(f.shortcutDetails.targetMimeType || '') : String(f.mimeType || '');
         if (mt === 'application/vnd.google-apps.folder') {
           if (cur.depth < 4) {
             const subPath = cur.name ? `${cur.name} / ${fname}` : fname;
-            queue.push({ id: String(f.id), name: subPath, depth: cur.depth + 1 });
+            queue.push({ id: targetId, name: subPath, depth: cur.depth + 1 });
           }
         } else if (isSupportedCertFile(fname, mt)) {
           const ft = detectCertFileType(fname, mt) || 'pdf';
           out.push({
-            id: String(f.id),
+            id: targetId,
             name: fname || (ft === 'image' ? 'Certificate.png' : 'Certificate.pdf'),
             mimeType: mt || (ft === 'image' ? 'image/png' : 'application/pdf'),
             fileType: ft,
-            webViewLink: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+            webViewLink: f.webViewLink || `https://drive.google.com/file/d/${targetId}/view`,
             modifiedTime: f.modifiedTime,
             folderName: cur.name || undefined,
           });

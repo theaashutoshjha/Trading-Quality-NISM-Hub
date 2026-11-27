@@ -113,10 +113,20 @@ export default {
         const cfg = JSON.parse(row.value);
         if (cfg.enabled) {
           if (cfg.webhookUrl && /^https:\/\//.test(cfg.webhookUrl)) {
+            const recipient = cfg.recipient || 'qaudits@fundsindia.com';
+            const thresholdDays = cfg.thresholdDays || 90;
             await fetch(cfg.webhookUrl, {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ event: 'nism_scheduled_compliance', recipient: cfg.recipient || 'qaudits@fundsindia.com', thresholdDays: cfg.thresholdDays || 30, timestamp: now }),
+              body: JSON.stringify({
+                event: 'nism_scheduled_compliance',
+                to: recipient,
+                recipient,
+                subject: `[FundsIndia Trading & Quality] Weekly NISM Compliance Check Reminder (${thresholdDays}d window)`,
+                plainBody: `Automated weekly NISM compliance check ran at ${now}.\nConfigured threshold: ${thresholdDays} days.\nOpen the Admin Portal → NISM Certificates to scan Drive and dispatch the latest expiry/missing report.`,
+                thresholdDays,
+                timestamp: now,
+              }),
             }).catch(() => {});
           }
           cfg.lastSentAt = now;
