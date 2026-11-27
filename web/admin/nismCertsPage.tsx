@@ -19,6 +19,7 @@ import {
   buildAuditEmail,
   buildComplianceCsv,
   buildGmailComposeUrl,
+  defaultRenewalStatus,
   detectCertFileType,
   downloadDriveFileBytes,
   ensureDriveSubfolder,
@@ -145,22 +146,33 @@ export function NismCertsPage() {
     try {
       const fld = await resolveOrCreateFolder(tok, fldInput);
       setFolder(fld);
-      const [savedDir, savedCerts, subfolders, sheetRef, liveFiles] = await Promise.all([
+      const [savedDir, subfolders, existingSheet, liveFiles] = await Promise.all([
         loadJsonFromDrive<EmployeeEntry[]>(tok, fld.id, DIRECTORY_FILE_NAME),
-        loadJsonFromDrive<DriveCertRecord[]>(tok, fld.id, ANALYSIS_CACHE_FILE_NAME),
         listDriveTeamFolders(tok, fld.id).catch(() => []),
         findDriveSheet(tok, fld.id).catch(() => null),
         listDriveCertificates(tok, fld.id).catch(() => null),
       ]);
       if (Array.isArray(savedDir) && savedDir.length) setDirectory(savedDir);
 
-      let activeCerts = Array.isArray(savedCerts) ? savedCerts : [];
+      // Load primary records from Google Sheet; if no Sheet exists yet, migrate any legacy JSON once or create the Sheet
+      let activeCerts: DriveCertRecord[] = [];
+      let sheetRef = existingSheet;
+      let migratedFromJson = false;
+      if (sheetRef) {
+        activeCerts = await importCertsFromDriveSheet(tok, sheetRef.id).catch(() => []);
+      } else {
+        const legacy = await loadJsonFromDrive<DriveCertRecord[]>(tok, fld.id, ANALYSIS_CACHE_FILE_NAME);
+        if (Array.isArray(legacy) && legacy.length) {
+          activeCerts = legacy;
+          migratedFromJson = true;
+        }
+      }
+
       let prunedCount = 0;
       let newInDriveCount = 0;
       if (liveFiles) {
         const liveById = new Map(liveFiles.map((f) => [f.id, f]));
         const before = activeCerts.length;
-        // Remove entries whose Drive PDF/image was deleted/trashed in Google Drive
         activeCerts = activeCerts
           .filter((c) => {
             const isManualOrLocal = c.fileId.startsWith('manual_') || c.fileId.startsWith('local_') || c.source === 'local';
@@ -181,20 +193,23 @@ export function NismCertsPage() {
         prunedCount = before - activeCerts.length;
         const cachedIds = new Set(activeCerts.map((c) => c.fileId));
         newInDriveCount = liveFiles.filter((f) => !cachedIds.has(f.id)).length;
-        if (prunedCount > 0) {
-          await saveJsonToDrive(tok, fld.id, ANALYSIS_CACHE_FILE_NAME, activeCerts).catch(() => {});
-        }
+      }
+
+      if (!sheetRef || migratedFromJson || prunedCount > 0) {
+        const m = matchCertificatesWithDirectory(activeCerts, Array.isArray(savedDir) ? savedDir : directory);
+        sheetRef = await syncCertsToDriveSheet(tok, fld.id, m.certs, m.missingEmployees, thresholdDays, sheetRef?.id).catch(() => sheetRef);
       }
 
       setCerts(activeCerts);
       setDriveTeamFolders(subfolders);
       setDriveSheet(sheetRef);
       const extraNotes = [
+        migratedFromJson ? 'migrated into Google Sheet' : '',
         prunedCount ? `removed ${prunedCount} deleted file(s)` : '',
         newInDriveCount ? `${newInDriveCount} new file(s) in Drive ready to scan` : '',
       ].filter(Boolean).join(' · ');
       setMsg(
-        `Connected to Drive "${fld.name}" (${subfolders.length} team folder(s)). Loaded ${activeCerts.length} certificate(s) and ${savedDir?.length || 0} employee(s)${extraNotes ? ` (${extraNotes})` : ''}.`,
+        `Connected to Drive "${fld.name}" (${subfolders.length} team folder(s)) & Google Sheet "${sheetRef?.name || 'NISM Compliance Master Sheet'}". Loaded ${activeCerts.length} record(s)${extraNotes ? ` (${extraNotes})` : ''}.`,
       );
     } catch (e: any) {
       setFolder(null);
@@ -338,15 +353,11 @@ export function NismCertsPage() {
     });
   }, [matched.certs, thresholdDays, statusFilter, seriesFilter, teamFilter, searchQ]);
 
-  async function persistAllToDrive(nextCerts: DriveCertRecord[], opts?: { alsoSyncSheet?: boolean }) {
+  async function persistAllToDrive(nextCerts: DriveCertRecord[]) {
     if (!token || !folder) return;
-    const cleanForDrive = nextCerts.map(({ localPreviewUrl: _lp, matchedEmployee: _me, ...rest }) => rest);
-    await saveJsonToDrive(token, folder.id, ANALYSIS_CACHE_FILE_NAME, cleanForDrive);
-    if (opts?.alsoSyncSheet || driveSheet) {
-      const m = matchCertificatesWithDirectory(nextCerts, directory);
-      const ref = await syncCertsToDriveSheet(token, folder.id, m.certs, m.missingEmployees, thresholdDays, driveSheet?.id);
-      setDriveSheet(ref);
-    }
+    const m = matchCertificatesWithDirectory(nextCerts, directory);
+    const ref = await syncCertsToDriveSheet(token, folder.id, m.certs, m.missingEmployees, thresholdDays, driveSheet?.id);
+    setDriveSheet(ref);
   }
 
   async function connectDrive() {
@@ -465,19 +476,25 @@ export function NismCertsPage() {
         }
         if ((i + 1) % 3 === 0 || i === files.length - 1) setCerts([...out]);
         if ((i + 1) % 25 === 0) {
-          await saveJsonToDrive(token, folder.id, ANALYSIS_CACHE_FILE_NAME, out).catch(() => {});
+          await persistAllToDrive(out).catch(() => {});
         }
       }
 
-      setCerts(out);
-      await persistAllToDrive(out, { alsoSyncSheet: true });
-      const pdfCount = out.filter((x) => x.fileType !== 'image').length;
-      const imgCount = out.filter((x) => x.fileType === 'image').length;
+      const nowIso = new Date().toISOString();
+      const stamped = out.map((c) => ({
+        ...c,
+        updatedAt: nowIso,
+        renewalStatus: c.renewalStatus || defaultRenewalStatus(c.expiryDate, thresholdDays),
+      }));
+      setCerts(stamped);
+      await persistAllToDrive(stamped);
+      const pdfCount = stamped.filter((x) => x.fileType !== 'image').length;
+      const imgCount = stamped.filter((x) => x.fileType === 'image').length;
       const notes = [
         lockedCount ? `${lockedCount} password-protected PDF(s)` : '',
         errCount ? `${errCount} file error(s)` : '',
       ].filter(Boolean).join(', ');
-      setMsg(`Analysed ${out.length} file(s) (${pdfCount} PDF, ${imgCount} Image) across Drive team folders and updated the Master Sheet${notes ? ` — ${notes} (marked for review/unlock)` : ''}.`);
+      setMsg(`Analysed ${stamped.length} file(s) (${pdfCount} PDF, ${imgCount} Image) across Drive team folders and saved to Google Sheet${notes ? ` — ${notes} (marked for review/unlock)` : ''}.`);
     } catch (e: any) {
       if (e instanceof GoogleApiError) {
         if (e.details.reason === 'SERVICE_DISABLED') setDriveApiErr(e.details);
@@ -592,7 +609,13 @@ export function NismCertsPage() {
         }
       }
 
-      const next = [...added, ...certs.filter((c) => !added.some((a) => a.fileId === c.fileId || (a.source === 'local' && a.fileName === c.fileName && a.team === c.team)))];
+      const nowIso = new Date().toISOString();
+      const stampedAdded = added.map((c) => ({
+        ...c,
+        updatedAt: nowIso,
+        renewalStatus: c.renewalStatus || defaultRenewalStatus(c.expiryDate, thresholdDays),
+      }));
+      const next = [...stampedAdded, ...certs.filter((c) => !stampedAdded.some((a) => a.fileId === c.fileId || (a.source === 'local' && a.fileName === c.fileName && a.team === c.team)))];
       setCerts(next);
       if (uploadTeam === '__NEW__') {
         setUploadTeam(teamFolderName);
@@ -600,10 +623,10 @@ export function NismCertsPage() {
       }
 
       if (useDrive && folder) {
-        await persistAllToDrive(next, { alsoSyncSheet: Boolean(driveSheet) });
-        setMsg(`Uploaded ${added.length} certificate(s) into team folder "${teamFolderName}" in Drive and analysed them${skipped ? ` (${skipped} unsupported file(s) skipped)` : ''}.`);
+        await persistAllToDrive(next);
+        setMsg(`Uploaded ${stampedAdded.length} certificate(s) into team folder "${teamFolderName}" and saved to Google Sheet${skipped ? ` (${skipped} unsupported file(s) skipped)` : ''}.`);
       } else {
-        setMsg(`Analysed ${added.length} certificate(s) under team "${teamFolderName}" (${added.filter((x) => x.fileType === 'pdf').length} PDF, ${added.filter((x) => x.fileType === 'image').length} Image)${skipped ? ` · ${skipped} unsupported file(s) skipped` : ''}.`);
+        setMsg(`Analysed ${stampedAdded.length} certificate(s) under team "${teamFolderName}" (${stampedAdded.filter((x) => x.fileType === 'pdf').length} PDF, ${stampedAdded.filter((x) => x.fileType === 'image').length} Image)${skipped ? ` · ${skipped} unsupported file(s) skipped` : ''}.`);
       }
     } catch (x: any) {
       if (x instanceof GoogleApiError && x.details.reason === 'SERVICE_DISABLED') setDriveApiErr(x.details);
@@ -629,10 +652,10 @@ export function NismCertsPage() {
   async function syncSheetToDrive() {
     if (!token || !folder) return setErr('Connect Google Drive first to create/update the Google Sheet in Drive.');
     setErr(''); setMsg('');
-    setBusy('Saving Master Sheet & syncing Google Sheet in Drive…');
+    setBusy('Saving all records directly to Google Sheet in Drive…');
     try {
-      await persistAllToDrive(certs, { alsoSyncSheet: true });
-      setMsg(`Synced ${certs.length} row(s) to Google Sheet "${driveSheet?.name || 'NISM Compliance Master Sheet'}" in Drive folder "${folder.name}".`);
+      await persistAllToDrive(certs);
+      setMsg(`Saved ${certs.length} row(s) to Google Sheet "${driveSheet?.name || 'NISM Compliance Master Sheet'}" in Drive folder "${folder.name}".`);
     } catch (e: any) {
       setErr(e.message || 'Google Sheet sync failed.');
     } finally {
@@ -643,7 +666,7 @@ export function NismCertsPage() {
   async function pullFromDriveSheet() {
     if (!token || !folder || !driveSheet) return setErr('No Google Sheet found in this Drive folder yet. Click "Save & Sync Google Sheet" first.');
     setErr(''); setMsg('');
-    setBusy(`Importing rows from Google Sheet "${driveSheet.name}"…`);
+    setBusy(`Loading rows from Google Sheet "${driveSheet.name}"…`);
     try {
       const imported = await importCertsFromDriveSheet(token, driveSheet.id);
       if (!imported.length) {
@@ -656,10 +679,9 @@ export function NismCertsPage() {
         return old ? { ...old, ...row } : row;
       });
       setCerts(merged);
-      await saveJsonToDrive(token, folder.id, ANALYSIS_CACHE_FILE_NAME, merged);
-      setMsg(`Imported ${merged.length} row(s) from Google Sheet "${driveSheet.name}".`);
+      setMsg(`Loaded ${merged.length} row(s) from Google Sheet "${driveSheet.name}".`);
     } catch (e: any) {
-      setErr(e.message || 'Failed to import from Google Sheet.');
+      setErr(e.message || 'Failed to load from Google Sheet.');
     } finally {
       setBusy('');
     }
@@ -833,6 +855,8 @@ export function NismCertsPage() {
     const cleaned: DriveCertRecord = {
       ...editingCert,
       folderName: editingCert.team || editingCert.folderName,
+      renewalStatus: editingCert.renewalStatus || defaultRenewalStatus(editingCert.expiryDate, thresholdDays),
+      updatedAt: new Date().toISOString(),
       analysisConfidence: 'high',
       passwordProtected: false,
       extractionError: undefined,
@@ -845,9 +869,9 @@ export function NismCertsPage() {
     if (token && folder) {
       try {
         await persistAllToDrive(updated);
-        setMsg(`Updated "${cleaned.fileName}" and saved to Google Drive.`);
+        setMsg(`Updated "${cleaned.fileName}" and synced to Google Sheet.`);
       } catch (e: any) {
-        setErr(e.message || 'Updated locally, but Drive save failed.');
+        setErr(e.message || 'Updated locally, but Google Sheet save failed.');
       }
     } else {
       setMsg(`Updated "${cleaned.fileName}".`);
@@ -926,6 +950,8 @@ export function NismCertsPage() {
       totalMarks: 100,
       percentage: 0,
       passStatus: 'PASS',
+      renewalStatus: 'Needs Review',
+      updatedAt: new Date().toISOString(),
       cpeOrExamType: 'Certification Examination',
       fileType: 'pdf',
       extractionMethod: 'manual',
@@ -934,19 +960,29 @@ export function NismCertsPage() {
     };
     setCerts((prev) => [newRow, ...prev]);
     setTab('sheet');
-    setMsg('Added a new row to the Master Sheet — fill in details and click "Save & Sync Sheet to Drive".');
+    setMsg('Added a new row to the Master Sheet — fill in details and click "Save & Sync Google Sheet".');
   }
 
   function updateRowField(fileId: string, patch: Partial<DriveCertRecord>) {
     setCerts((prev) => prev.map((c) => {
       if (c.fileId !== fileId) return c;
-      const merged = { ...c, ...patch };
+      const merged: DriveCertRecord = {
+        ...c,
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      };
       if ('marksObtained' in patch || 'totalMarks' in patch) {
         const tot = merged.totalMarks || 100;
         merged.percentage = tot > 0 ? Math.round((merged.marksObtained / tot) * 10000) / 100 : 0;
       }
       if ('team' in patch && patch.team !== undefined) {
         merged.folderName = patch.team;
+      }
+      if ('expiryDate' in patch && !('renewalStatus' in patch)) {
+        const prevDefault = defaultRenewalStatus(c.expiryDate, thresholdDays);
+        if (!c.renewalStatus || c.renewalStatus === prevDefault) {
+          merged.renewalStatus = defaultRenewalStatus(merged.expiryDate, thresholdDays);
+        }
       }
       return merged;
     }));
@@ -1101,7 +1137,7 @@ export function NismCertsPage() {
 
         <div className="row wrap">
           <button className="btn primary" onClick={connectDrive} disabled={!!busy}>
-            {token ? '↻ Reconnect Google Drive & Gmail' : '🔗 Connect Google Drive & Gmail'}
+            {token ? '↻ Reconnect Google Drive, Sheets & Gmail' : '🔗 Connect Google Drive, Sheets & Gmail'}
           </button>
           <button className="btn" onClick={scanDriveFolder} disabled={!driveConnected || !!busy}>
             🔍 Scan &amp; Analyse All Drive (PDFs &amp; Images)
@@ -1411,14 +1447,14 @@ export function NismCertsPage() {
         </div>
       )}
 
-      {/* 📊 Master Sheet Tab (Inline Add / Edit / Remove / Google Sheet Sync) */}
+      {/* 📊 Master Sheet Tab (Inline Add / Edit / Remove / Live 18-Column Google Sheet) */}
       {tab === 'sheet' && (
         <div className="card stack">
           <div className="row between wrap">
             <div>
               <h2 style={{ margin: 0 }}>Compliance Master Sheet</h2>
               <p className="muted small" style={{ margin: 0 }}>
-                Add, edit, or remove any record directly inline. Syncs to both Drive cache and a live <b>Google Sheet</b> in your Drive folder.
+                Add, edit, or remove any record directly inline. Syncs directly to the live 18-column <b>NISM Compliance Master Sheet</b> (Google Sheet) in your Drive folder.
               </p>
             </div>
             <div className="row wrap">
@@ -1432,7 +1468,7 @@ export function NismCertsPage() {
                   {driveSheet && (
                     <>
                       <button className="btn sm" onClick={pullFromDriveSheet} disabled={!!busy}>⬇ Pull Edits from Google Sheet</button>
-                      <a className="btn sm" href={driveSheet.webViewLink} target="_blank" rel="noopener noreferrer">Open Sheet ↗</a>
+                      <a className="btn sm" href={driveSheet.webViewLink} target="_blank" rel="noopener noreferrer">Open Google Sheet ↗</a>
                     </>
                   )}
                 </>
@@ -1445,7 +1481,7 @@ export function NismCertsPage() {
             {!filteredCerts.length ? (
               <div className="muted">No rows in sheet yet. Click <b>＋ Add Row</b> or scan/upload certificates above.</div>
             ) : (
-              <table className="t" style={{ minWidth: 1380 }}>
+              <table className="t" style={{ minWidth: 2150 }}>
                 <thead>
                   <tr>
                     <th style={{ width: 32 }}>
@@ -1458,25 +1494,32 @@ export function NismCertsPage() {
                         }}
                       />
                     </th>
-                    <th>Team</th>
-                    <th>Emp ID</th>
                     <th>Holder Name</th>
-                    <th>Email</th>
+                    <th>Employee Code</th>
+                    <th>Advisor Email</th>
+                    <th>Department</th>
                     <th>NISM Series</th>
-                    <th>Certificate #</th>
+                    <th>Certificate No</th>
+                    <th>Enrolment No</th>
                     <th>Exam Date</th>
-                    <th>Expiry Date</th>
-                    <th>Marks</th>
-                    <th>Total</th>
-                    <th>%</th>
-                    <th>Status</th>
-                    <th>Remarks</th>
+                    <th>Valid Till</th>
+                    <th>Days Remaining</th>
+                    <th>Compliance Status</th>
+                    <th>Marks Obtained</th>
+                    <th>Total Marks</th>
+                    <th>Percentage</th>
+                    <th>Result</th>
+                    <th>Renewal Status</th>
+                    <th>Drive File Link</th>
+                    <th>Updated At</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredCerts.map((c) => {
                     const exp = getExpiryInfo(c.expiryDate, thresholdDays);
+                    const expClass = exp.status === 'expired' ? 'r' : exp.status === 'expiring_soon' ? 'w' : exp.status === 'active' ? 'g' : 'm';
+                    const compStatus = exp.status === 'expired' ? 'Expired' : exp.status === 'expiring_soon' ? 'Expiring Soon' : exp.status === 'active' ? 'Active' : 'Unknown Date';
                     const cellInput = { padding: '6px 8px', fontSize: '.82rem', borderRadius: 8, minWidth: 95 };
                     return (
                       <tr key={c.fileId}>
@@ -1495,8 +1538,31 @@ export function NismCertsPage() {
                           />
                         </td>
                         <td>
+                          <input
+                            style={{ ...cellInput, minWidth: 150 }}
+                            value={c.holderName || c.matchedEmployee?.name || ''}
+                            onChange={(e) => updateRowField(c.fileId, { holderName: e.target.value })}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            style={{ ...cellInput, width: 92, minWidth: 92 }}
+                            value={c.empId ?? c.matchedEmployee?.empId ?? ''}
+                            onChange={(e) => updateRowField(c.fileId, { empId: e.target.value })}
+                            placeholder="FI..."
+                          />
+                        </td>
+                        <td>
+                          <input
+                            style={{ ...cellInput, minWidth: 170 }}
+                            value={c.email ?? c.matchedEmployee?.email ?? ''}
+                            onChange={(e) => updateRowField(c.fileId, { email: e.target.value })}
+                            placeholder="name@fundsindia.com"
+                          />
+                        </td>
+                        <td>
                           <select
-                            style={{ ...cellInput, minWidth: 115 }}
+                            style={{ ...cellInput, minWidth: 118 }}
                             value={getCertTeam(c)}
                             onChange={(e) => updateRowField(c.fileId, { team: e.target.value })}
                           >
@@ -1506,45 +1572,29 @@ export function NismCertsPage() {
                         </td>
                         <td>
                           <input
-                            style={{ ...cellInput, width: 88 }}
-                            value={c.empId ?? c.matchedEmployee?.empId ?? ''}
-                            onChange={(e) => updateRowField(c.fileId, { empId: e.target.value })}
-                            placeholder="FI..."
-                          />
-                        </td>
-                        <td>
-                          <input
-                            style={{ ...cellInput, minWidth: 150 }}
-                            value={c.holderName}
-                            onChange={(e) => updateRowField(c.fileId, { holderName: e.target.value })}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            style={{ ...cellInput, minWidth: 165 }}
-                            value={c.email ?? c.matchedEmployee?.email ?? ''}
-                            onChange={(e) => updateRowField(c.fileId, { email: e.target.value })}
-                            placeholder="name@fundsindia.com"
-                          />
-                        </td>
-                        <td>
-                          <input
-                            style={{ ...cellInput, minWidth: 175 }}
+                            style={{ ...cellInput, minWidth: 185 }}
                             value={c.nismSeries}
                             onChange={(e) => updateRowField(c.fileId, { nismSeries: e.target.value })}
                           />
                         </td>
                         <td>
                           <input
-                            style={{ ...cellInput, minWidth: 135, fontFamily: 'monospace' }}
+                            style={{ ...cellInput, minWidth: 140, fontFamily: 'monospace' }}
                             value={c.certificateNumber}
                             onChange={(e) => updateRowField(c.fileId, { certificateNumber: e.target.value })}
                           />
                         </td>
                         <td>
                           <input
+                            style={{ ...cellInput, minWidth: 115, fontFamily: 'monospace' }}
+                            value={c.enrolmentNumber}
+                            onChange={(e) => updateRowField(c.fileId, { enrolmentNumber: e.target.value })}
+                          />
+                        </td>
+                        <td>
+                          <input
                             type="date"
-                            style={{ ...cellInput, minWidth: 130 }}
+                            style={{ ...cellInput, minWidth: 132 }}
                             value={c.examDate}
                             onChange={(e) => updateRowField(c.fileId, { examDate: e.target.value })}
                           />
@@ -1552,16 +1602,21 @@ export function NismCertsPage() {
                         <td>
                           <input
                             type="date"
-                            style={{ ...cellInput, minWidth: 130 }}
+                            style={{ ...cellInput, minWidth: 132 }}
                             value={c.expiryDate}
                             onChange={(e) => updateRowField(c.fileId, { expiryDate: e.target.value, expiryInferred: false })}
                           />
-                          <div className="small muted" style={{ marginTop: 2 }}>{exp.label}</div>
+                        </td>
+                        <td className="small" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+                          {exp.status === 'unknown' ? '—' : `${exp.daysRemaining} d`}
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <span className={'badge ' + expClass}>{compStatus}</span>
                         </td>
                         <td>
                           <input
                             type="number"
-                            style={{ ...cellInput, width: 68, minWidth: 68 }}
+                            style={{ ...cellInput, width: 72, minWidth: 72 }}
                             value={c.marksObtained}
                             onChange={(e) => updateRowField(c.fileId, { marksObtained: Number(e.target.value) || 0 })}
                           />
@@ -1569,7 +1624,7 @@ export function NismCertsPage() {
                         <td>
                           <input
                             type="number"
-                            style={{ ...cellInput, width: 68, minWidth: 68 }}
+                            style={{ ...cellInput, width: 72, minWidth: 72 }}
                             value={c.totalMarks}
                             onChange={(e) => updateRowField(c.fileId, { totalMarks: Number(e.target.value) || 100 })}
                           />
@@ -1577,7 +1632,7 @@ export function NismCertsPage() {
                         <td className="small" style={{ fontWeight: 700 }}>{c.percentage}%</td>
                         <td>
                           <select
-                            style={{ ...cellInput, width: 78, minWidth: 78 }}
+                            style={{ ...cellInput, width: 80, minWidth: 80 }}
                             value={c.passStatus}
                             onChange={(e) => updateRowField(c.fileId, { passStatus: e.target.value as 'PASS' | 'FAIL' })}
                           >
@@ -1587,16 +1642,31 @@ export function NismCertsPage() {
                         </td>
                         <td>
                           <input
-                            style={{ ...cellInput, minWidth: 120 }}
-                            value={c.remarks || ''}
-                            onChange={(e) => updateRowField(c.fileId, { remarks: e.target.value })}
-                            placeholder="Notes…"
+                            style={{ ...cellInput, minWidth: 165 }}
+                            value={c.renewalStatus ?? defaultRenewalStatus(c.expiryDate, thresholdDays)}
+                            onChange={(e) => updateRowField(c.fileId, { renewalStatus: e.target.value })}
+                            placeholder="Active / Renewal Pending"
                           />
                         </td>
                         <td>
+                          <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
+                            <input
+                              style={{ ...cellInput, minWidth: 145 }}
+                              value={c.webViewLink || ''}
+                              onChange={(e) => updateRowField(c.fileId, { webViewLink: e.target.value })}
+                              placeholder="https://drive.google.com/..."
+                            />
+                            {c.webViewLink && (
+                              <a className="btn sm" href={c.webViewLink} target="_blank" rel="noopener noreferrer" title="Open Drive file">↗</a>
+                            )}
+                          </div>
+                        </td>
+                        <td className="small muted" style={{ whiteSpace: 'nowrap' }}>
+                          {c.updatedAt ? c.updatedAt.slice(0, 19).replace('T', ' ') : '—'}
+                        </td>
+                        <td>
                           <div className="row" style={{ gap: 6 }}>
-                            {c.webViewLink && <a className="btn sm" href={c.webViewLink} target="_blank" rel="noopener noreferrer">PDF</a>}
-                            <button className="btn sm danger" onClick={() => removeCert(c)} title="Remove row">✕</button>
+                            <button className="btn sm danger" onClick={() => removeCert(c)} title="Remove row (and trash Drive file)">✕</button>
                           </div>
                         </td>
                       </tr>
@@ -1774,6 +1844,14 @@ export function NismCertsPage() {
                   <option value="PASS">PASS</option>
                   <option value="FAIL">FAIL</option>
                 </select>
+              </div>
+              <div>
+                <label className="f" style={{ marginTop: 0 }}>Renewal Status</label>
+                <input
+                  value={editingCert.renewalStatus ?? defaultRenewalStatus(editingCert.expiryDate, thresholdDays)}
+                  onChange={(e) => setEditingCert({ ...editingCert, renewalStatus: e.target.value })}
+                  placeholder="Active / Renewal Required"
+                />
               </div>
               <div>
                 <label className="f" style={{ marginTop: 0 }}>Remarks</label>

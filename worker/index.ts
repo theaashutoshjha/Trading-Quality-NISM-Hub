@@ -23,7 +23,7 @@ const baseHeaders = (nonce?: string): Record<string, string> => ({
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: blob: https://i.ytimg.com",
     'frame-src https://www.youtube-nocookie.com https://www.youtube.com https://accounts.google.com',
-    "connect-src 'self' blob: data: https://www.googleapis.com https://oauth2.googleapis.com https://gmail.googleapis.com https://accounts.google.com https://cdn.jsdelivr.net https://tessdata.projectnaptha.com",
+    "connect-src 'self' blob: data: https://www.googleapis.com https://sheets.googleapis.com https://oauth2.googleapis.com https://gmail.googleapis.com https://accounts.google.com https://cdn.jsdelivr.net https://tessdata.projectnaptha.com",
     "object-src 'none'",
     "base-uri 'self'",
     "frame-ancestors 'none'",

@@ -46,6 +46,8 @@ export interface DriveCertRecord {
   empId?: string;
   email?: string;
   remarks?: string;
+  renewalStatus?: string;
+  updatedAt?: string;
   expiryInferred?: boolean;
 }
 
@@ -170,7 +172,7 @@ export async function requestGoogleToken(clientId: string, opts?: { silent?: boo
   return new Promise((resolve, reject) => {
     const client = window.google!.accounts!.oauth2!.initTokenClient({
       client_id: clientId.trim(),
-      scope: 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/gmail.send',
+      scope: 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/gmail.send',
       login_hint: opts?.loginHint || DEFAULT_GOOGLE_EMAIL,
       callback: (resp) => {
         if (resp.error || !resp.access_token) {
@@ -530,11 +532,11 @@ export async function syncCertsToDriveSheet(
   token: string,
   rootFolderId: string,
   certs: DriveCertRecord[],
-  missingEmployees: EmployeeEntry[],
+  _missingEmployees: EmployeeEntry[],
   thresholdDays: number,
   existingSheetId?: string,
 ): Promise<DriveSheetRef> {
-  const csv = buildComplianceCsv(certs, missingEmployees, thresholdDays);
+  const csv = buildSheetCsv(certs, thresholdDays);
   const sheetId = existingSheetId || (await findDriveSheet(token, rootFolderId))?.id;
 
   if (sheetId) {
@@ -619,28 +621,30 @@ export async function importCertsFromDriveSheet(token: string, sheetId: string):
   const rows = parseCsvRows(csv);
   if (rows.length < 2) return [];
   const hdr = rows[0].map((h) => h.trim().toLowerCase());
-  const idx = (name: string) => hdr.findIndex((h) => h.includes(name));
+  const idx = (...names: string[]) => {
+    for (const n of names) {
+      const i = hdr.findIndex((h) => h === n || h.includes(n));
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
   const iType = idx('record type');
-  const iTeam = idx('team');
-  const iEmpId = idx('employee id');
-  const iName = idx('name');
-  const iEmail = idx('email');
+  const iName = idx('holder name', 'name');
+  const iEmpId = idx('employee code', 'employee id');
+  const iEmail = idx('advisor email', 'email');
+  const iDept = idx('department', 'team');
   const iSeries = idx('nism series');
-  const iCert = idx('certificate #');
-  const iEnrol = idx('enrolment #');
-  const iExamType = idx('exam type');
+  const iCert = idx('certificate no', 'certificate #');
+  const iEnrol = idx('enrolment no', 'enrolment #');
   const iExamDate = idx('exam date');
-  const iExpiry = idx('expiry date');
-  const iMarks = hdr.findIndex((h) => h === 'marks');
+  const iExpiry = idx('valid till', 'expiry date');
+  const iMarks = idx('marks obtained', 'marks');
   const iTotal = idx('total marks');
   const iPct = idx('percentage');
-  const iPass = idx('pass status');
-  const iFmt = idx('file format');
-  const iMethod = idx('extraction method');
-  const iConf = idx('confidence');
-  const iFile = idx('file name');
-  const iLink = idx('link');
-  const iRemarks = idx('remarks');
+  const iResult = idx('result', 'pass status');
+  const iRenewal = idx('renewal status');
+  const iLink = idx('drive file link', 'link');
+  const iUpdated = idx('updated at');
 
   const out: DriveCertRecord[] = [];
   for (let rIdx = 1; rIdx < rows.length; rIdx++) {
@@ -650,20 +654,19 @@ export async function importCertsFromDriveSheet(token: string, sheetId: string):
     if (recType === 'MISSING_EMPLOYEE') continue;
     const holderName = get(iName);
     if (!holderName) continue;
-    const fileName = get(iFile) || `${holderName}.pdf`;
     const webViewLink = get(iLink);
     const idFromLink = webViewLink.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1] || '';
     const marksObtained = Number(get(iMarks)) || 0;
     const totalMarks = Number(get(iTotal)) || 100;
     const percentage = Number(get(iPct)) || (totalMarks > 0 ? Math.round((marksObtained / totalMarks) * 10000) / 100 : 0);
-    const team = get(iTeam);
+    const dept = get(iDept);
     out.push({
-      fileId: idFromLink || `sheet_${rIdx}_${fileName}`,
-      fileName,
+      fileId: idFromLink || `sheet_${rIdx}_${holderName.replace(/\W+/g, '_')}`,
+      fileName: `${holderName}.pdf`,
       webViewLink,
       holderName,
-      team: team || undefined,
-      folderName: team || undefined,
+      team: dept || undefined,
+      folderName: dept || undefined,
       empId: get(iEmpId) || undefined,
       email: get(iEmail) || undefined,
       nismSeries: get(iSeries) || 'NISM Certification',
@@ -674,12 +677,13 @@ export async function importCertsFromDriveSheet(token: string, sheetId: string):
       marksObtained,
       totalMarks,
       percentage,
-      passStatus: get(iPass).toUpperCase() === 'FAIL' ? 'FAIL' : 'PASS',
-      cpeOrExamType: get(iExamType) || 'Certification Examination',
-      fileType: get(iFmt).toLowerCase() === 'image' ? 'image' : 'pdf',
-      extractionMethod: (get(iMethod) as ExtractionMethod) || 'manual',
-      analysisConfidence: (get(iConf) as AnalysisConfidence) || 'high',
-      remarks: get(iRemarks) || undefined,
+      passStatus: get(iResult).toUpperCase() === 'FAIL' ? 'FAIL' : 'PASS',
+      cpeOrExamType: 'Certification Examination',
+      renewalStatus: get(iRenewal) || undefined,
+      updatedAt: get(iUpdated) || undefined,
+      fileType: 'pdf',
+      extractionMethod: 'manual',
+      analysisConfidence: 'high',
       source: webViewLink ? 'drive' : 'local',
     });
   }
@@ -1348,59 +1352,92 @@ export function buildGmailComposeUrl(params: { to: string; subject: string; body
   return `https://mail.google.com/mail/?${qs.toString()}`;
 }
 
-export function buildComplianceCsv(certs: DriveCertRecord[], missingEmployees: EmployeeEntry[], thresholdDays: number): string {
+export function defaultRenewalStatus(expiryIso: string, thresholdDays = 90): string {
+  const inf = getExpiryInfo(expiryIso, thresholdDays);
+  if (inf.status === 'expired') return 'Expired — Renewal Required';
+  if (inf.status === 'expiring_soon') return 'Expiring Soon — Renewal Pending';
+  if (inf.status === 'active') return 'Active / Valid';
+  return 'Needs Review';
+}
+
+export function buildSheetCsv(certs: DriveCertRecord[], thresholdDays: number): string {
   const csvEsc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const headers = [
-    'Record Type', 'Team', 'Employee ID', 'Name', 'Email', 'Department / Folder', 'NISM Series',
-    'Certificate #', 'Enrolment #', 'Exam Type', 'Exam Date', 'Expiry Date',
-    'Compliance Status', 'Marks', 'Total Marks', 'Percentage', 'Pass Status',
-    'File Format', 'Extraction Method', 'Confidence', 'File Name', 'Link', 'Remarks',
+    'Holder Name',
+    'Employee Code',
+    'Advisor Email',
+    'Department',
+    'NISM Series',
+    'Certificate No',
+    'Enrolment No',
+    'Exam Date',
+    'Valid Till',
+    'Days Remaining',
+    'Compliance Status',
+    'Marks Obtained',
+    'Total Marks',
+    'Percentage',
+    'Result',
+    'Renewal Status',
+    'Drive File Link',
+    'Updated At',
   ];
   const rows: string[] = [headers.map(csvEsc).join(',')];
+  const nowIso = new Date().toISOString();
 
   for (const c of certs) {
     const inf = getExpiryInfo(c.expiryDate, thresholdDays);
-    const team = c.team || (c.folderName ? c.folderName.split('/')[0].trim() : '') || c.matchedEmployee?.department || '';
+    const dept = c.team || (c.folderName ? c.folderName.split('/')[0].trim() : '') || c.matchedEmployee?.department || '';
+    const compStatus = inf.status === 'expired' ? 'Expired' : inf.status === 'expiring_soon' ? 'Expiring Soon' : inf.status === 'active' ? 'Active' : 'Unknown Date';
     rows.push([
-      'CERTIFICATE',
-      team,
-      c.matchedEmployee?.empId || c.empId || '',
       c.matchedEmployee?.name || c.holderName,
+      c.matchedEmployee?.empId || c.empId || '',
       c.matchedEmployee?.email || c.email || '',
-      c.matchedEmployee?.department || c.folderName || team,
+      dept,
       c.nismSeries,
       c.certificateNumber,
       c.enrolmentNumber,
-      c.cpeOrExamType,
       c.examDate,
       c.expiryDate,
-      inf.label,
+      inf.status === 'unknown' ? '' : inf.daysRemaining,
+      compStatus,
       c.marksObtained,
       c.totalMarks,
       c.percentage,
       c.passStatus,
-      (c.fileType || 'pdf').toUpperCase(),
-      c.extractionMethod || 'pdf-text',
-      c.analysisConfidence || 'medium',
-      c.fileName,
+      c.renewalStatus || defaultRenewalStatus(c.expiryDate, thresholdDays),
       c.webViewLink || '',
-      c.remarks || '',
-    ].map(csvEsc).join(','));
-  }
-
-  for (const e of missingEmployees) {
-    rows.push([
-      'MISSING_EMPLOYEE',
-      e.department,
-      e.empId,
-      e.name,
-      e.email,
-      e.department,
-      '', '', '', '', '', '',
-      'MISSING / NOT UPLOADED',
-      '', '', '', '', '', '', '', '', '', '',
+      c.updatedAt || nowIso,
     ].map(csvEsc).join(','));
   }
 
   return rows.join('\r\n');
+}
+
+export function buildComplianceCsv(certs: DriveCertRecord[], missingEmployees: EmployeeEntry[], thresholdDays: number): string {
+  const base = buildSheetCsv(certs, thresholdDays);
+  if (!missingEmployees.length) return base;
+  const csvEsc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const nowIso = new Date().toISOString();
+  const extra = missingEmployees.map((e) => [
+    e.name,
+    e.empId,
+    e.email,
+    e.department,
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    'MISSING / NOT UPLOADED',
+    '',
+    '',
+    '',
+    '',
+    'Action Required — Missing Certificate',
+    '',
+    nowIso,
+  ].map(csvEsc).join(','));
+  return [base, ...extra].join('\r\n');
 }
