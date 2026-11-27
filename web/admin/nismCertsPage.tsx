@@ -85,6 +85,8 @@ export function NismCertsPage() {
 
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [editingCert, setEditingCert] = useState<DriveCertRecord | null>(null);
+  const [pdfPassword, setPdfPassword] = useState('');
+  const [unlockErr, setUnlockErr] = useState('');
   const [inspectCert, setInspectCert] = useState<DriveCertRecord | null>(null);
   const [showAppsScriptHelp, setShowAppsScriptHelp] = useState(false);
 
@@ -286,28 +288,72 @@ export function NismCertsPage() {
         return;
       }
       const out: DriveCertRecord[] = [];
+      let lockedCount = 0;
+      let errCount = 0;
       for (let i = 0; i < files.length; i++) {
         const f = files[i];
         setBusy(`Analysing ${i + 1}/${files.length}: ${f.name}…`);
-        const bytes = await downloadDriveFileBytes(token, f.id);
-        const parsed = await analyseCertificateBytes({
-          bytes,
-          fileName: f.name,
-          mimeType: f.mimeType,
-          onProgress: (stage) => setBusy(`Analysing ${i + 1}/${files.length} (${f.name}): ${stage}`),
-        });
-        out.push({
-          fileId: f.id,
-          fileName: f.name,
-          webViewLink: f.webViewLink,
-          folderName: f.folderName,
-          source: 'drive',
-          ...parsed,
-        });
+        try {
+          const bytes = await downloadDriveFileBytes(token, f.id);
+          const parsed = await analyseCertificateBytes({
+            bytes,
+            fileName: f.name,
+            mimeType: f.mimeType,
+            onProgress: (stage) => setBusy(`Analysing ${i + 1}/${files.length} (${f.name}): ${stage}`),
+          });
+          if (parsed.passwordProtected) lockedCount++;
+          out.push({
+            fileId: f.id,
+            fileName: f.name,
+            webViewLink: f.webViewLink,
+            folderName: f.folderName,
+            source: 'drive',
+            ...parsed,
+          });
+        } catch (fileErr: any) {
+          if (fileErr instanceof GoogleApiError && (fileErr.details.reason === 'SERVICE_DISABLED' || fileErr.details.reason === 'UNAUTHENTICATED')) {
+            throw fileErr;
+          }
+          errCount++;
+          out.push({
+            fileId: f.id,
+            fileName: f.name,
+            webViewLink: f.webViewLink,
+            folderName: f.folderName,
+            source: 'drive',
+            holderName: f.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim(),
+            nismSeries: 'NISM Certification',
+            certificateNumber: '—',
+            enrolmentNumber: '—',
+            examDate: '',
+            expiryDate: '',
+            marksObtained: 0,
+            totalMarks: 100,
+            percentage: 0,
+            passStatus: 'PASS',
+            cpeOrExamType: 'Certification Examination',
+            fileType: f.fileType,
+            mimeType: f.mimeType,
+            extractionMethod: f.fileType === 'image' ? 'image-ocr' : 'pdf-text',
+            analysisConfidence: 'low',
+            extractionError: String(fileErr?.message || 'Could not download or analyse file.'),
+          });
+        }
+        // Update table live every 3 files and checkpoint to Drive every 25 files
+        if ((i + 1) % 3 === 0 || i === files.length - 1) setCerts([...out]);
+        if ((i + 1) % 25 === 0) {
+          await saveJsonToDrive(token, folder.id, ANALYSIS_CACHE_FILE_NAME, out).catch(() => {});
+        }
       }
       setCerts(out);
       await saveJsonToDrive(token, folder.id, ANALYSIS_CACHE_FILE_NAME, out);
-      setMsg(`Analysed ${out.length} certificate(s) (${out.filter((x) => x.fileType === 'pdf').length} PDF, ${out.filter((x) => x.fileType === 'image').length} Image) from Google Drive and saved metadata to "${ANALYSIS_CACHE_FILE_NAME}".`);
+      const pdfCount = out.filter((x) => x.fileType !== 'image').length;
+      const imgCount = out.filter((x) => x.fileType === 'image').length;
+      const notes = [
+        lockedCount ? `${lockedCount} password-protected PDF(s)` : '',
+        errCount ? `${errCount} file error(s)` : '',
+      ].filter(Boolean).join(', ');
+      setMsg(`Analysed ${out.length} file(s) (${pdfCount} PDF, ${imgCount} Image) from "${folder.name}"${notes ? ` — ${notes} (marked for review/unlock)` : ''}.`);
     } catch (e: any) {
       if (e instanceof GoogleApiError) {
         if (e.details.reason === 'SERVICE_DISABLED') setDriveApiErr(e.details);
@@ -339,41 +385,70 @@ export function NismCertsPage() {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const ft = detectCertFileType(file.name, file.type) || 'pdf';
-        const bytes = new Uint8Array(await file.arrayBuffer());
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
 
-        let fileId = `local_${Date.now()}_${i}_${file.name}`;
-        let webViewLink = '';
-        let uploadedName = file.name;
-        let uploadedMime = file.type;
-        let source: 'drive' | 'local' = 'local';
+          let fileId = `local_${Date.now()}_${i}_${file.name}`;
+          let webViewLink = '';
+          let uploadedName = file.name;
+          let uploadedMime = file.type;
+          let source: 'drive' | 'local' = 'local';
 
-        if (useDrive && folder) {
-          setBusy(`Uploading ${i + 1}/${files.length} to Drive: ${file.name}…`);
-          const uploaded = await uploadCertificateToDrive(token, folder.id, file);
-          fileId = uploaded.id;
-          uploadedName = uploaded.name;
-          uploadedMime = uploaded.mimeType;
-          webViewLink = uploaded.webViewLink;
-          source = 'drive';
+          if (useDrive && folder) {
+            setBusy(`Uploading ${i + 1}/${files.length} to Drive: ${file.name}…`);
+            const uploaded = await uploadCertificateToDrive(token, folder.id, file);
+            fileId = uploaded.id;
+            uploadedName = uploaded.name;
+            uploadedMime = uploaded.mimeType;
+            webViewLink = uploaded.webViewLink;
+            source = 'drive';
+          }
+
+          const parsed = await analyseCertificateBytes({
+            bytes,
+            fileName: uploadedName,
+            mimeType: uploadedMime,
+            onProgress: (stage) => setBusy(`Analysing ${i + 1}/${files.length} (${uploadedName}): ${stage}`),
+          });
+
+          const localPreviewUrl = !useDrive && ft === 'image' ? URL.createObjectURL(file) : undefined;
+          added.push({
+            fileId,
+            fileName: uploadedName,
+            webViewLink,
+            folderName: useDrive ? folder!.name : 'Uploaded Batch',
+            source,
+            localPreviewUrl,
+            ...parsed,
+          });
+        } catch (fileErr: any) {
+          if (fileErr instanceof GoogleApiError && (fileErr.details.reason === 'SERVICE_DISABLED' || fileErr.details.reason === 'UNAUTHENTICATED')) {
+            throw fileErr;
+          }
+          added.push({
+            fileId: `local_${Date.now()}_${i}_${file.name}`,
+            fileName: file.name,
+            webViewLink: '',
+            folderName: useDrive ? folder!.name : 'Uploaded Batch',
+            source: 'local',
+            holderName: file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim(),
+            nismSeries: 'NISM Certification',
+            certificateNumber: '—',
+            enrolmentNumber: '—',
+            examDate: '',
+            expiryDate: '',
+            marksObtained: 0,
+            totalMarks: 100,
+            percentage: 0,
+            passStatus: 'PASS',
+            cpeOrExamType: 'Certification Examination',
+            fileType: ft,
+            mimeType: file.type,
+            extractionMethod: ft === 'image' ? 'image-ocr' : 'pdf-text',
+            analysisConfidence: 'low',
+            extractionError: String(fileErr?.message || 'Could not read uploaded file.'),
+          });
         }
-
-        const parsed = await analyseCertificateBytes({
-          bytes,
-          fileName: uploadedName,
-          mimeType: uploadedMime,
-          onProgress: (stage) => setBusy(`Analysing ${i + 1}/${files.length} (${uploadedName}): ${stage}`),
-        });
-
-        const localPreviewUrl = !useDrive && ft === 'image' ? URL.createObjectURL(file) : undefined;
-        added.push({
-          fileId,
-          fileName: uploadedName,
-          webViewLink,
-          folderName: useDrive ? folder!.name : 'Uploaded Batch',
-          source,
-          localPreviewUrl,
-          ...parsed,
-        });
       }
 
       const next = [...added, ...certs.filter((c) => !added.some((a) => a.fileId === c.fileId || (a.source === 'local' && a.fileName === c.fileName)))];
@@ -591,19 +666,47 @@ export function NismCertsPage() {
 
   async function saveEditedCert() {
     if (!editingCert) return;
-    const updated = certs.map((c) => (c.fileId === editingCert.fileId ? { ...editingCert, analysisConfidence: 'high' as const } : c));
+    const cleaned: DriveCertRecord = { ...editingCert, analysisConfidence: 'high', passwordProtected: false, extractionError: undefined };
+    const updated = certs.map((c) => (c.fileId === cleaned.fileId ? cleaned : c));
     setCerts(updated);
     setEditingCert(null);
+    setPdfPassword('');
+    setUnlockErr('');
     if (token && folder) {
       try {
         const clean = updated.map(({ localPreviewUrl: _lp, ...rest }) => rest);
         await saveJsonToDrive(token, folder.id, ANALYSIS_CACHE_FILE_NAME, clean);
-        setMsg(`Updated "${editingCert.fileName}" and saved to Google Drive.`);
+        setMsg(`Updated "${cleaned.fileName}" and saved to Google Drive.`);
       } catch (e: any) {
         setErr(e.message || 'Updated locally, but Drive save failed.');
       }
     } else {
-      setMsg(`Updated "${editingCert.fileName}".`);
+      setMsg(`Updated "${cleaned.fileName}".`);
+    }
+  }
+
+  async function unlockDrivePdf() {
+    if (!editingCert || !token || !pdfPassword) return;
+    setUnlockErr('');
+    setBusy(`Unlocking ${editingCert.fileName}…`);
+    try {
+      const bytes = await downloadDriveFileBytes(token, editingCert.fileId);
+      const parsed = await analyseCertificateBytes({
+        bytes,
+        fileName: editingCert.fileName,
+        mimeType: editingCert.mimeType,
+        password: pdfPassword,
+      });
+      if (parsed.passwordProtected) {
+        setUnlockErr(parsed.extractionError || 'Incorrect password.');
+      } else {
+        setEditingCert({ ...editingCert, ...parsed, passwordProtected: false, extractionError: undefined });
+        setPdfPassword('');
+      }
+    } catch (e: any) {
+      setUnlockErr(e?.message || 'Failed to unlock PDF.');
+    } finally {
+      setBusy('');
     }
   }
 
@@ -942,7 +1045,9 @@ export function NismCertsPage() {
                         </td>
                         <td>
                           <span className="badge">{methodLabel}</span>
-                          {c.analysisConfidence === 'low' && <div style={{ marginTop: 4 }}><span className="badge w">Review</span></div>}
+                          {c.passwordProtected && <div style={{ marginTop: 4 }}><span className="badge r">🔒 Locked PDF</span></div>}
+                          {!c.passwordProtected && c.extractionError && <div style={{ marginTop: 4 }}><span className="badge r">⚠ Read Error</span></div>}
+                          {!c.passwordProtected && !c.extractionError && c.analysisConfidence === 'low' && <div style={{ marginTop: 4 }}><span className="badge w">Review</span></div>}
                         </td>
                         <td className="small">
                           <div>{c.nismSeries}</div>
@@ -965,7 +1070,7 @@ export function NismCertsPage() {
                         </td>
                         <td>
                           <div className="row" style={{ gap: 6 }}>
-                            <button className="btn sm" onClick={() => setEditingCert({ ...c })} title="Edit parsed details">Edit</button>
+                            <button className="btn sm" onClick={() => { setEditingCert({ ...c }); setPdfPassword(''); setUnlockErr(''); }} title="Edit parsed details">Edit</button>
                             <button className="btn sm" onClick={() => setInspectCert(c)} title="Inspect extracted OCR / PDF text and image preview">
                               {c.localPreviewUrl ? 'Preview' : 'Text'}
                             </button>
@@ -1053,6 +1158,26 @@ export function NismCertsPage() {
               <button className="btn sm ghost" onClick={() => setEditingCert(null)}>✕</button>
             </div>
             <div className="muted small" style={{ marginBottom: 12 }}>{editingCert.fileName}</div>
+            {editingCert.extractionError && (
+              <div className="alert warn" style={{ marginTop: 0 }}>
+                <div>{editingCert.extractionError}</div>
+                {editingCert.passwordProtected && editingCert.source === 'drive' && token && (
+                  <div className="row wrap" style={{ marginTop: 8 }}>
+                    <input
+                      type="password"
+                      style={{ flex: 1, minWidth: 180 }}
+                      value={pdfPassword}
+                      onChange={(e) => setPdfPassword(e.target.value)}
+                      placeholder="Enter PDF password to unlock & extract…"
+                    />
+                    <button type="button" className="btn sm primary" disabled={!pdfPassword || !!busy} onClick={unlockDrivePdf}>
+                      🔓 Unlock &amp; Re-analyse
+                    </button>
+                  </div>
+                )}
+                {unlockErr && <div className="small" style={{ color: 'var(--err)', marginTop: 6 }}>{unlockErr}</div>}
+              </div>
+            )}
             <div className="grid g2">
               <div>
                 <label className="f" style={{ marginTop: 0 }}>Holder Name</label>

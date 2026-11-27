@@ -40,6 +40,8 @@ export interface DriveCertRecord {
   rawTextSnippet?: string;
   source?: 'drive' | 'local';
   localPreviewUrl?: string;
+  passwordProtected?: boolean;
+  extractionError?: string;
 }
 
 export interface ExpiryInfo {
@@ -78,8 +80,8 @@ export const DEFAULT_FOLDER_NAME = 'FundsIndia - NISM Certificates';
 export const DIRECTORY_FILE_NAME = 'nism-employee-directory.json';
 export const ANALYSIS_CACHE_FILE_NAME = 'nism-analysis-data.json';
 
-const CERT_EXT_RE = /\.(pdf|png|jpe?g|webp|bmp|tiff?|gif)$/i;
-const IMAGE_EXT_RE = /\.(png|jpe?g|webp|bmp|tiff?|gif)$/i;
+const CERT_EXT_RE = /\.(pdf|png|jpe?g|webp|bmp|tiff?|gif|jfif|avif)$/i;
+const IMAGE_EXT_RE = /\.(png|jpe?g|webp|bmp|tiff?|gif|jfif|avif)$/i;
 const IMAGE_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -305,7 +307,7 @@ export async function listDriveCertificates(token: string, folderId: string): Pr
     let pageToken = '';
     do {
       const q = encodeURIComponent(`'${cur.id}' in parents and trashed=false`);
-      const url = `${DRIVE_API}/files?q=${q}&orderBy=modifiedTime desc&fields=nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,shortcutDetails(targetId,targetMimeType))&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true${pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : ''}`;
+      const url = `${DRIVE_API}/files?q=${q}&orderBy=modifiedTime desc&fields=nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,shortcutDetails(targetId,targetMimeType))&pageSize=500&supportsAllDrives=true&includeItemsFromAllDrives=true${pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : ''}`;
       const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!r.ok) throw await driveErr(r, 'Failed to list certificates in Drive folder');
       const d: any = await r.json();
@@ -315,7 +317,7 @@ export async function listDriveCertificates(token: string, folderId: string): Pr
         const targetId = isShortcut ? String(f.shortcutDetails.targetId) : String(f.id);
         const mt = isShortcut ? String(f.shortcutDetails.targetMimeType || '') : String(f.mimeType || '');
         if (mt === 'application/vnd.google-apps.folder') {
-          if (cur.depth < 4) {
+          if (cur.depth < 8) {
             const subPath = cur.name ? `${cur.name} / ${fname}` : fname;
             queue.push({ id: targetId, name: subPath, depth: cur.depth + 1 });
           }
@@ -478,9 +480,9 @@ export function getExpiryInfo(expiryIso: string, thresholdDays = 30): ExpiryInfo
 }
 
 /** Extract line-preserving text from PDF using pdfjs-dist */
-export async function extractPdfText(bytes: Uint8Array): Promise<string> {
+export async function extractPdfText(bytes: Uint8Array, password?: string): Promise<string> {
   // Clone bytes because pdfjs transfers the underlying ArrayBuffer to its worker
-  const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+  const doc = await pdfjs.getDocument({ data: bytes.slice(), password }).promise;
   const pages: string[] = [];
   for (let p = 1; p <= Math.min(3, doc.numPages); p++) {
     const page = await doc.getPage(p);
@@ -511,8 +513,8 @@ export async function extractPdfText(bytes: Uint8Array): Promise<string> {
   return pages.join('\n').trim();
 }
 
-async function renderPdfPagesToCanvases(bytes: Uint8Array, maxPages = 2): Promise<HTMLCanvasElement[]> {
-  const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+async function renderPdfPagesToCanvases(bytes: Uint8Array, maxPages = 2, password?: string): Promise<HTMLCanvasElement[]> {
+  const doc = await pdfjs.getDocument({ data: bytes.slice(), password }).promise;
   const canvases: HTMLCanvasElement[] = [];
   try {
     const count = Math.min(maxPages, doc.numPages);
@@ -606,36 +608,54 @@ async function runOcrOnCanvases(canvases: HTMLCanvasElement[], onProgress?: (pct
   return texts.join('\n').trim();
 }
 
+function isPasswordError(e: unknown): boolean {
+  const err = e as { name?: string; message?: string } | null;
+  const msg = String(err?.message || e || '');
+  return err?.name === 'PasswordException' || /no password given|incorrect password|password/i.test(msg);
+}
+
 export async function analyseCertificateBytes(params: {
   bytes: Uint8Array;
   fileName: string;
   mimeType?: string;
+  password?: string;
   onProgress?: (stage: string) => void;
 }): Promise<Omit<DriveCertRecord, 'fileId' | 'fileName' | 'webViewLink'>> {
-  const { bytes, fileName, mimeType, onProgress } = params;
+  const { bytes, fileName, mimeType, password, onProgress } = params;
   const fileType: CertFileType = detectCertFileType(fileName, mimeType) || 'pdf';
 
   let text = '';
   let extractionMethod: ExtractionMethod = fileType === 'image' ? 'image-ocr' : 'pdf-text';
+  let passwordProtected = false;
+  let extractionError = '';
 
   if (fileType === 'pdf') {
     onProgress?.('Extracting PDF text…');
     try {
-      text = await extractPdfText(bytes);
-    } catch {
+      text = await extractPdfText(bytes, password);
+    } catch (e: any) {
+      if (isPasswordError(e)) {
+        passwordProtected = true;
+        extractionError = password ? 'Incorrect PDF password.' : 'Password-protected PDF (No password given). Click Edit to unlock or enter details.';
+      } else {
+        extractionError = String(e?.message || 'PDF text read failed.');
+      }
       text = '';
     }
-    if (text.replace(/\s+/g, '').length < 40) {
+    if (!passwordProtected && text.replace(/\s+/g, '').length < 40) {
       onProgress?.('Scanned PDF detected — running OCR…');
       try {
-        const canvases = await renderPdfPagesToCanvases(bytes, 2);
+        const canvases = await renderPdfPagesToCanvases(bytes, 2, password);
         const ocrText = await runOcrOnCanvases(canvases, (pct) => onProgress?.(`OCR on scanned PDF (${pct}%)…`));
         if (ocrText.trim().length > text.trim().length) {
           text = ocrText;
           extractionMethod = 'pdf-ocr';
         }
-      } catch {
-        // Keep whatever text was extracted
+      } catch (e: any) {
+        if (isPasswordError(e)) {
+          passwordProtected = true;
+          extractionError = password ? 'Incorrect PDF password.' : 'Password-protected PDF (No password given). Click Edit to unlock or enter details.';
+        }
       }
     }
   } else {
@@ -645,7 +665,8 @@ export async function analyseCertificateBytes(params: {
       onProgress?.('Running OCR on image (0%)…');
       text = await runOcrOnCanvases([canvas], (pct) => onProgress?.(`Running OCR on image (${pct}%)…`));
       extractionMethod = 'image-ocr';
-    } catch {
+    } catch (e: any) {
+      extractionError = String(e?.message || 'Image OCR failed.');
       text = '';
     }
   }
@@ -656,7 +677,10 @@ export async function analyseCertificateBytes(params: {
     fileType,
     mimeType: mimeType || (fileType === 'image' ? 'image/png' : 'application/pdf'),
     extractionMethod,
+    analysisConfidence: passwordProtected ? 'low' : parsed.analysisConfidence,
     rawTextSnippet: text.slice(0, 1500),
+    ...(passwordProtected ? { passwordProtected: true } : {}),
+    ...(extractionError ? { extractionError } : {}),
   };
 }
 
