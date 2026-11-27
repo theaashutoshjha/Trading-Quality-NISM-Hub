@@ -3,10 +3,6 @@
   "name": "fundsindia-learning-hub",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-12",
-  "routes": [
-    { "pattern": "fundsindia.lmslearning.online", "custom_domain": true, "zone_name": "lmslearning.online" },
-    { "pattern": "www.fundsindia.lmslearning.online", "custom_domain": true, "zone_name": "lmslearning.online" }
-  ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -18,7 +14,7 @@
     {
       "binding": "DB",
       "database_name": "fundsindia-hub",
-      "database_id": "15c842cb-354d-4452-8331-ae93c227e4cb",
+      "database_id": "6fb47d1a-5c74-4a45-9bf9-376e5d018fbb",
       "migrations_dir": "migrations"
     }
   ],
