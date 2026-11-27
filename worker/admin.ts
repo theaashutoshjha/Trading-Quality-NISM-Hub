@@ -1,8 +1,8 @@
-﻿import { Ctx, audit, fail, flag, int, isEmail, json, newId, slugify, str } from './lib';
+import { Ctx, audit, fail, flag, int, isEmail, json, newId, slugify, str } from './lib';
 import { hashPassword, passwordProblem, randomToken } from './security';
 import type { Route } from './router';
 import { fetchPlaylist, oembed } from './youtube';
-import { FULL_ACCESS_TEAM, TEAMS, isTeam } from './teams';
+import { isTeamDb } from './teams';
 
 const A = 'admin' as const;
 const OWNER = 'admin-only' as const;
@@ -95,12 +95,13 @@ export const adminRoutes: Route[] = [
     for (const r of rows as any[]) {
       const email = str(r.email, 120).toLowerCase(), name = str(r.name, 80);
       if (!isEmail(email) || name.length < 2) { skipped.push(email || '(blank)'); continue; }
-      const role = ['learner', 'trainer', 'admin'].includes(r.role) ? r.role : 'learner';
+      const role = ['learner', 'head', 'trainer', 'admin'].includes(r.role) ? r.role : 'learner';
       if (role === 'admin' && c.user!.role !== 'admin') continue;
+      const team = await isTeamDb(c.env.DB, r.team);
       const temp = randomToken(9) + 'Aa1'; // shown once to the admin, learner must change on first login
       try {
         await c.env.DB.prepare(`INSERT INTO users (id,email,name,emp_id,department,team,role,status,pw_hash,must_change) VALUES (?,?,?,?,?,?,?,'active',?,1)`)
-          .bind(newId(12), email, name, str(r.empId, 30) || null, str(r.department, 60) || null, isTeam(r.team) ? r.team : null, role, await hashPassword(temp)).run();
+          .bind(newId(12), email, name, str(r.empId, 30) || null, str(r.department, 60) || null, team, role, await hashPassword(temp)).run();
         created.push({ email, password: temp });
       } catch { skipped.push(email); }
     }
@@ -113,9 +114,9 @@ export const adminRoutes: Route[] = [
     if (id === c.user!.id && (b.status && b.status !== 'active' || b.role && b.role !== c.user!.role)) fail(400, 'You cannot demote or disable your own account.');
     const cur = await c.env.DB.prepare(`SELECT role,status,team FROM users WHERE id=?`).bind(id).first<any>();
     if (!cur) fail(404, 'User not found.');
-    const role = ['learner', 'trainer', 'admin'].includes(b.role) ? b.role : cur.role;
+    const role = ['learner', 'head', 'trainer', 'admin'].includes(b.role) ? b.role : cur.role;
     const status = ['active', 'pending', 'suspended'].includes(b.status) ? b.status : cur.status;
-    const team = b.team === undefined ? cur.team : isTeam(b.team) ? b.team : null;
+    const team = b.team === undefined ? cur.team : await isTeamDb(c.env.DB, b.team);
     try {
       await c.env.DB.prepare(`UPDATE users SET name=COALESCE(NULLIF(?,''),name), emp_id=?, department=?, team=?, role=?, status=? WHERE id=?`)
         .bind(str(b.name, 80), str(b.empId, 30) || null, str(b.department, 60) || null, team, role, status, id).run();
@@ -137,10 +138,11 @@ export const adminRoutes: Route[] = [
     await audit(c.env, c.user!.email, 'user_deleted', c.params[0], c.ip);
     return json({ ok: true });
   }],
-  // ---------- Teams: which courses each team can open ----------
+  // ---------- Teams: create, delete, and which courses each team can open ----------
   ['GET', '/api/admin/teams', OWNER, async (c) => {
     const db = c.env.DB;
-    const [rows, courses, counts] = await Promise.all([
+    const [teamRows, rows, courses, counts] = await Promise.all([
+      db.prepare(`SELECT name, description, full_access FROM teams ORDER BY full_access DESC, name`).all<{ name: string; description: string | null; full_access: number }>(),
       db.prepare(`SELECT team, course_id FROM team_access`).all<{ team: string; course_id: string }>(),
       db.prepare(`SELECT id, code, title, category FROM courses ORDER BY sort, title`).all(),
       db.prepare(`SELECT team, COUNT(*) n FROM users WHERE role='learner' AND team IS NOT NULL GROUP BY team`).all<{ team: string; n: number }>(),
@@ -148,15 +150,38 @@ export const adminRoutes: Route[] = [
     const n = new Map(counts.results.map((x) => [x.team, x.n]));
     const unassigned = await db.prepare(`SELECT COUNT(*) n FROM users WHERE role='learner' AND team IS NULL`).first<{ n: number }>();
     return json({
-      teams: TEAMS.map((t) => ({ name: t, learners: n.get(t) || 0, full: t === FULL_ACCESS_TEAM, courses: t === FULL_ACCESS_TEAM ? courses.results.map((x: any) => x.id) : rows.results.filter((r) => r.team === t).map((r) => r.course_id) })),
+      teams: teamRows.results.map((t) => ({
+        name: t.name,
+        description: t.description || '',
+        learners: n.get(t.name) || 0,
+        full: !!t.full_access,
+        courses: t.full_access ? courses.results.map((x: any) => x.id) : rows.results.filter((r) => r.team === t.name).map((r) => r.course_id),
+      })),
       courses: courses.results,
       unassigned: unassigned?.n || 0,
     });
   }],
+  ['POST', '/api/admin/teams', OWNER, async (c) => {
+    const b = await c.body();
+    const name = str(b.name, 60);
+    if (name.length < 2) fail(400, 'Team name must be at least 2 characters.');
+    const exists = await c.env.DB.prepare(`SELECT 1 FROM teams WHERE name=? COLLATE NOCASE`).bind(name).first();
+    if (exists) fail(409, 'A team with this name already exists.');
+    const desc = str(b.description, 200);
+    const full = b.full ? 1 : 0;
+    const ids: string[] = Array.isArray(b.courses) ? [...new Set<string>(b.courses.map(String))].slice(0, 200) : [];
+    await c.env.DB.batch([
+      c.env.DB.prepare(`INSERT INTO teams (name, description, full_access, created_by) VALUES (?,?,?,?)`).bind(name, desc || null, full, c.user!.email),
+      ...(full ? [] : ids.map((id) => c.env.DB.prepare(`INSERT OR IGNORE INTO team_access (team,course_id) SELECT ?, id FROM courses WHERE id=?`).bind(name, id))),
+    ]);
+    await audit(c.env, c.user!.email, 'team_created', name, c.ip);
+    return json({ ok: true, name });
+  }],
   ['PUT', '/api/admin/teams/:team', OWNER, async (c) => {
     const team = c.params[0];
-    if (!isTeam(team)) fail(404, 'Unknown team.');
-    if (team === FULL_ACCESS_TEAM) fail(400, `${FULL_ACCESS_TEAM} always has access to every course.`);
+    const row = await c.env.DB.prepare(`SELECT name, full_access FROM teams WHERE name=?`).bind(team).first<{ name: string; full_access: number }>();
+    if (!row) return fail(404, 'Unknown team.');
+    if (row.full_access) fail(400, `${team} always has access to every course.`);
     const b = await c.body();
     const ids: string[] = Array.isArray(b.courses) ? [...new Set<string>(b.courses.map(String))].slice(0, 200) : [];
     const db = c.env.DB;
@@ -167,9 +192,57 @@ export const adminRoutes: Route[] = [
     await audit(c.env, c.user!.email, 'team_access_updated', `${team}: ${ids.length} courses`, c.ip);
     return json({ ok: true });
   }],
+  ['DELETE', '/api/admin/teams/:team', OWNER, async (c) => {
+    const team = c.params[0];
+    const row = await c.env.DB.prepare(`SELECT full_access FROM teams WHERE name=?`).bind(team).first<{ full_access: number }>();
+    if (!row) return fail(404, 'Unknown team.');
+    if (row.full_access) fail(400, 'Cannot delete full-access team.');
+    await c.env.DB.batch([
+      c.env.DB.prepare(`UPDATE users SET team=NULL WHERE team=?`).bind(team),
+      c.env.DB.prepare(`DELETE FROM team_access WHERE team=?`).bind(team),
+      c.env.DB.prepare(`DELETE FROM teams WHERE name=?`).bind(team),
+    ]);
+    await audit(c.env, c.user!.email, 'team_deleted', team, c.ip);
+    return json({ ok: true });
+  }],
+  ['GET', '/api/admin/locks', OWNER, async (c) => {
+    const r = await c.env.DB.prepare(`SELECT key, fails, locked_until, updated_at FROM login_attempts ORDER BY updated_at DESC LIMIT 200`).all();
+    return json({ locks: r.results });
+  }],
+  ['DELETE', '/api/admin/locks', OWNER, async (c) => {
+    await c.env.DB.prepare(`DELETE FROM login_attempts`).run();
+    await audit(c.env, c.user!.email, 'locks_cleared', 'All login lockouts cleared', c.ip);
+    return json({ ok: true });
+  }],
   ['GET', '/api/admin/audit', OWNER, async (c) => {
-    const r = await c.env.DB.prepare(`SELECT id,actor,action,detail,ip,created_at FROM audit_log ORDER BY id DESC LIMIT 300`).all();
+    const actor = str(c.url.searchParams.get('actor'), 80);
+    const action = str(c.url.searchParams.get('action'), 60);
+    const where: string[] = [];
+    const args: string[] = [];
+    if (actor) { where.push(`actor LIKE ?`); args.push(`%${actor}%`); }
+    if (action) { where.push(`action LIKE ?`); args.push(`%${action}%`); }
+    const sql = `SELECT id,actor,action,detail,ip,created_at FROM audit_log${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT 500`;
+    const r = await c.env.DB.prepare(sql).bind(...args).all();
     return json({ log: r.results });
+  }],
+  ['GET', '/api/admin/question-stats', A, async (c) => {
+    const r = await c.env.DB.prepare(
+      `SELECT q.id, q.question, qz.title AS quiz_title, co.code AS course_code, s.total_tries, s.correct_tries,
+              ROUND((s.correct_tries * 100.0) / s.total_tries, 1) AS pass_rate
+         FROM question_stats s JOIN questions q ON q.id=s.question_id JOIN quizzes qz ON qz.id=q.quiz_id JOIN courses co ON co.id=qz.course_id
+        WHERE s.total_tries > 0 ORDER BY pass_rate ASC, s.total_tries DESC LIMIT 100`,
+    ).all();
+    return json({ stats: r.results });
+  }],
+  ['POST', '/api/admin/certificates/:id/revoke', OWNER, async (c) => {
+    await c.env.DB.prepare(`UPDATE certificates SET revoked=1 WHERE id=?`).bind(c.params[0]).run();
+    await audit(c.env, c.user!.email, 'certificate_revoked', c.params[0], c.ip);
+    return json({ ok: true });
+  }],
+  ['POST', '/api/admin/certificates/:id/reissue', OWNER, async (c) => {
+    await c.env.DB.prepare(`UPDATE certificates SET revoked=0 WHERE id=?`).bind(c.params[0]).run();
+    await audit(c.env, c.user!.email, 'certificate_reissued', c.params[0], c.ip);
+    return json({ ok: true });
   }],
 
   // ---------- Courses ----------
@@ -323,7 +396,7 @@ export const adminRoutes: Route[] = [
     const [courses, attempts, certs] = await Promise.all([
       db.prepare(`SELECT c.title,c.code,COUNT(p.lesson_id) done,(SELECT COUNT(*) FROM lessons l WHERE l.course_id=c.id AND l.published=1) total, MAX(p.completed_at) last FROM progress p JOIN courses c ON c.id=p.course_id WHERE p.user_id=? GROUP BY c.id ORDER BY last DESC`).bind(id).all(),
       db.prepare(`SELECT q.title,a.pct,a.passed,a.created_at FROM attempts a JOIN quizzes q ON q.id=a.quiz_id WHERE a.user_id=? ORDER BY a.created_at DESC LIMIT 30`).bind(id).all(),
-      db.prepare(`SELECT ce.id,c.title,ce.pct,ce.issued_at FROM certificates ce JOIN courses c ON c.id=ce.course_id WHERE ce.user_id=?`).bind(id).all(),
+      db.prepare(`SELECT ce.id,c.title,ce.pct,ce.issued_at,ce.revoked FROM certificates ce JOIN courses c ON c.id=ce.course_id WHERE ce.user_id=?`).bind(id).all(),
     ]);
     return json({ courses: courses.results, attempts: attempts.results, certificates: certs.results });
   }],
@@ -435,6 +508,144 @@ export const adminRoutes: Route[] = [
   }],
   ['DELETE', '/api/admin/news/:id', A, async (c) => {
     await c.env.DB.prepare(`DELETE FROM news WHERE id=?`).bind(c.params[0]).run();
+    return json({ ok: true });
+  }],
+
+  // ---------- Learner feedback & contact messages ----------
+  ['GET', '/api/admin/feedback', A, async (c) => {
+    const r = await c.env.DB.prepare(`SELECT * FROM feedback ORDER BY created_at DESC LIMIT 500`).all();
+    return json({ items: r.results });
+  }],
+  ['PUT', '/api/admin/feedback/:id', A, async (c) => {
+    const b = await c.body();
+    const status = b.status === 'reviewed' ? 'reviewed' : 'new';
+    await c.env.DB.prepare(`UPDATE feedback SET status=? WHERE id=?`).bind(status, c.params[0]).run();
+    return json({ ok: true });
+  }],
+  ['DELETE', '/api/admin/feedback/:id', OWNER, async (c) => {
+    await c.env.DB.prepare(`DELETE FROM feedback WHERE id=?`).bind(c.params[0]).run();
+    return json({ ok: true });
+  }],
+
+  // ---------- FAQs ----------
+  ['GET', '/api/admin/faqs', A, async (c) => {
+    const r = await c.env.DB.prepare(`SELECT * FROM faqs ORDER BY sort, id`).all();
+    return json({ faqs: r.results });
+  }],
+  ['POST', '/api/admin/faqs', A, async (c) => {
+    const b = await c.body();
+    const question = str(b.question, 600), answer = str(b.answer, 4000);
+    if (!question || !answer) fail(400, 'Question and answer are required.');
+    const n = await c.env.DB.prepare(`SELECT COALESCE(MAX(sort),0)+1 n FROM faqs`).first<{ n: number }>();
+    const id = 'faq-' + newId(8);
+    await c.env.DB.prepare(`INSERT INTO faqs (id,category,section,question,answer,sort) VALUES (?,?,?,?,?,?)`)
+      .bind(id, str(b.category, 60) || 'Mutual Funds', str(b.section, 100) || 'General', question, answer, n!.n).run();
+    await audit(c.env, c.user!.email, 'faq_created', question.slice(0, 80), c.ip);
+    return json({ id });
+  }],
+  ['PUT', '/api/admin/faqs/:id', A, async (c) => {
+    const b = await c.body();
+    const question = str(b.question, 600), answer = str(b.answer, 4000);
+    if (!question || !answer) fail(400, 'Question and answer are required.');
+    await c.env.DB.prepare(`UPDATE faqs SET category=?,section=?,question=?,answer=?,updated_at=datetime('now') WHERE id=?`)
+      .bind(str(b.category, 60) || 'Mutual Funds', str(b.section, 100) || 'General', question, answer, c.params[0]).run();
+    return json({ ok: true });
+  }],
+  ['DELETE', '/api/admin/faqs/:id', A, async (c) => {
+    await c.env.DB.prepare(`DELETE FROM faqs WHERE id=?`).bind(c.params[0]).run();
+    return json({ ok: true });
+  }],
+
+  // ---------- Push Notifications ----------
+  ['GET', '/api/admin/notifications', A, async (c) => {
+    const r = await c.env.DB.prepare(`SELECT * FROM notifications ORDER BY created_at DESC LIMIT 100`).all();
+    return json({ notifications: r.results });
+  }],
+  ['POST', '/api/admin/notifications', A, async (c) => {
+    const b = await c.body();
+    const title = str(b.title, 160);
+    if (!title) fail(400, 'Notification title is required.');
+    const body = str(b.body, 2000) || null;
+    const link = str(b.link, 200) || null;
+    const target = str(b.team, 60) || '__ALL__';
+    const userId = str(b.userId, 40) || null;
+    const id = newId(12);
+    await c.env.DB.prepare(`INSERT INTO notifications (id,user_id,team,title,body,link,is_read) VALUES (?,?,?,?,?,?,0)`)
+      .bind(id, userId, userId ? null : target, title, body, link).run();
+    await audit(c.env, c.user!.email, 'notification_pushed', `${userId || target}: ${title}`, c.ip);
+    return json({ ok: true, id });
+  }],
+  ['DELETE', '/api/admin/notifications/:id', A, async (c) => {
+    await c.env.DB.prepare(`DELETE FROM notifications WHERE id=?`).bind(c.params[0]).run();
+    return json({ ok: true });
+  }],
+
+  // ---------- System Settings (Certificate Branding, Banner, Scheduled NISM) ----------
+  ['GET', '/api/admin/settings', A, async (c) => {
+    const r = await c.env.DB.prepare(`SELECT key,value,updated_at FROM system_settings`).all<{ key: string; value: string; updated_at: string }>();
+    const out: Record<string, any> = {};
+    for (const row of r.results) {
+      try { out[row.key] = JSON.parse(row.value); } catch { out[row.key] = row.value; }
+    }
+    return json({ settings: out });
+  }],
+  ['PUT', '/api/admin/settings/:key', OWNER, async (c) => {
+    const key = c.params[0];
+    if (!['cert_branding', 'banner', 'nism_schedule'].includes(key)) fail(400, 'Unknown setting key.');
+    const b = await c.body();
+    await c.env.DB.prepare(
+      `INSERT INTO system_settings (key,value,updated_at) VALUES (?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')`,
+    ).bind(key, JSON.stringify(b)).run();
+    await audit(c.env, c.user!.email, 'setting_updated', key, c.ip);
+    return json({ ok: true });
+  }],
+
+  // ---------- Session & Device Monitor ----------
+  ['GET', '/api/admin/sessions', OWNER, async (c) => {
+    const r = await c.env.DB.prepare(
+      `SELECT s.token_hash,s.user_id,s.kind,s.ip,s.ua,s.created_at,s.expires_at,u.email,u.name,u.role,u.team
+         FROM sessions s JOIN users u ON u.id=s.user_id
+        WHERE s.expires_at > ?
+        ORDER BY s.created_at DESC LIMIT 300`,
+    ).bind(new Date().toISOString()).all();
+    return json({ sessions: r.results });
+  }],
+  ['DELETE', '/api/admin/sessions/user/:userId', OWNER, async (c) => {
+    await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(c.params[0]).run();
+    await audit(c.env, c.user!.email, 'sessions_revoked_user', c.params[0], c.ip);
+    return json({ ok: true });
+  }],
+  ['DELETE', '/api/admin/sessions/:tokenHash', OWNER, async (c) => {
+    await c.env.DB.prepare(`DELETE FROM sessions WHERE token_hash=?`).bind(c.params[0]).run();
+    await audit(c.env, c.user!.email, 'session_revoked', c.params[0].slice(0, 12), c.ip);
+    return json({ ok: true });
+  }],
+
+  // ---------- "What Changed" Regulatory & Product Change Log ----------
+  ['GET', '/api/admin/changelog', A, async (c) => {
+    const r = await c.env.DB.prepare(`SELECT * FROM regulatory_changes ORDER BY effective_date DESC, created_at DESC`).all();
+    return json({ items: r.results });
+  }],
+  ['POST', '/api/admin/changelog', A, async (c) => {
+    const b = await c.body();
+    const title = str(b.title, 200), oldRule = str(b.old_rule, 2000), newRule = str(b.new_rule, 2000);
+    if (!title || !oldRule || !newRule) fail(400, 'Title, Old Rule, and New Rule are required.');
+    const id = 'rc-' + newId(8);
+    await c.env.DB.prepare(
+      `INSERT INTO regulatory_changes (id,category,title,effective_date,old_rule,new_rule,impact,published) VALUES (?,?,?,?,?,?,?,?)`,
+    ).bind(id, str(b.category, 50) || 'Regulatory', title, str(b.effective_date, 20) || new Date().toISOString().slice(0, 10), oldRule, newRule, str(b.impact, 1000) || null, flag(b.published ?? 1)).run();
+    await audit(c.env, c.user!.email, 'changelog_created', title, c.ip);
+    return json({ ok: true, id });
+  }],
+  ['PUT', '/api/admin/changelog/:id', A, async (c) => {
+    const b = await c.body();
+    await c.env.DB.prepare(
+      `UPDATE regulatory_changes SET category=?,title=?,effective_date=?,old_rule=?,new_rule=?,impact=?,published=? WHERE id=?`,
+    ).bind(str(b.category, 50) || 'Regulatory', str(b.title, 200), str(b.effective_date, 20), str(b.old_rule, 2000), str(b.new_rule, 2000), str(b.impact, 1000) || null, flag(b.published ?? 1), c.params[0]).run();
+    return json({ ok: true });
+  }],
+  ['DELETE', '/api/admin/changelog/:id', A, async (c) => {
+    await c.env.DB.prepare(`DELETE FROM regulatory_changes WHERE id=?`).bind(c.params[0]).run();
     return json({ ok: true });
   }],
 ];

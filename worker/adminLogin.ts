@@ -11,7 +11,7 @@ export function adminLoginPage(nonce: string, adminPath: string) {
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--tx);font:15px/1.5 'Plus Jakarta Sans',system-ui,Segoe UI,sans-serif;padding:16px}
 .card{width:100%;max-width:420px;background:var(--bg);border-radius:28px;padding:34px;box-shadow:9px 9px 20px var(--d),-9px -9px 20px var(--l)}
 .bar{height:5px;width:64px;border-radius:99px;background:var(--brand);margin:14px 0}
-img.logo{height:42px}h1{font-size:22px;margin:0 0 4px;font-weight:800}p.sub{color:var(--mut);margin:0 0 18px;font-size:13px}
+img.logo{height:44px;border-radius:10px;background:#fff;padding:4px}h1{font-size:22px;margin:0 0 4px;font-weight:800}p.sub{color:var(--mut);margin:0 0 18px;font-size:13px}
 label{display:block;font-size:11px;color:var(--mut);margin:16px 0 7px;text-transform:uppercase;letter-spacing:.08em;font-weight:800}
 input{width:100%;padding:13px 16px;border-radius:14px;border:0;background:var(--bg);color:var(--tx);font:inherit;box-shadow:inset 5px 5px 10px var(--d),inset -5px -5px 10px var(--l)}
 input:focus{outline:2px solid var(--pri);outline-offset:2px}
@@ -29,6 +29,7 @@ button:active{box-shadow:inset 3px 3px 8px #0003}button:disabled{opacity:.6;curs
   <div id="codeRow" class="hide"><label>Authenticator code</label><input id="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></div>
   <div class="err" id="err" role="alert"></div>
   <button id="go">Sign in</button>
+  <div style="margin-top:18px;text-align:center;font-size:11px;color:var(--mut)">Planned, designed, and developed by Rajesh Chakravarthi Rao</div>
 </form>
 <script nonce="${nonce}">
 const $=id=>document.getElementById(id);let setup=false;

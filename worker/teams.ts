@@ -19,8 +19,16 @@ export type Team = (typeof TEAMS)[number];
 
 export const isTeam = (v: unknown): v is Team => typeof v === 'string' && (TEAMS as readonly string[]).includes(v);
 
+export async function isTeamDb(db: D1Database, v: unknown): Promise<string | null> {
+  if (typeof v !== 'string') return null;
+  const name = v.trim();
+  if (!name) return null;
+  const row = await db.prepare(`SELECT name FROM teams WHERE name = ?`).bind(name).first<{ name: string }>();
+  return row ? row.name : null;
+}
+
 /**
- * Course ids this signed-in user may open, or null for "everything" (admins and trainers).
+ * Course ids this signed-in user may open, or null for "everything" (admins, trainers, heads, or full-access teams).
  * A learner with no team sees nothing; their team's rows in team_access decide the rest.
  */
 export async function allowedCourses(c: Ctx): Promise<Set<string> | null> {
@@ -30,6 +38,8 @@ export async function allowedCourses(c: Ctx): Promise<Set<string> | null> {
   if (cached) return cached;
   const set = new Set<string>();
   if (u.team) {
+    const teamRow = await c.env.DB.prepare(`SELECT full_access FROM teams WHERE name = ?`).bind(u.team).first<{ full_access: number }>();
+    if (teamRow?.full_access) return null;
     const r = await c.env.DB.prepare(
       `SELECT ta.course_id FROM team_access ta JOIN courses co ON co.id = ta.course_id AND co.published = 1 WHERE ta.team = ?`,
     ).bind(u.team).all<{ course_id: string }>();

@@ -1,4 +1,5 @@
-// Live news: pulls a few important public RSS feeds server-side and caches them at the edge.
+// Live learning feed: pulls educational personal-finance, mutual-fund, and wealth-planning RSS feeds.
+// Excludes regulatory enforcement/adjudication notices and short-term trading noise.
 
 export interface FeedItem {
   title: string;
@@ -8,14 +9,15 @@ export interface FeedItem {
   published: string; // ISO
 }
 
-// Deliberately few, high-signal sources: the regulator, the central bank, and three market/MF desks.
 const FEEDS: { url: string; source: string; category: string }[] = [
-  { url: 'https://www.sebi.gov.in/sebirss.xml', source: 'SEBI', category: 'Regulatory' },
-  { url: 'https://www.rbi.org.in/pressreleases_rss.xml', source: 'RBI', category: 'Policy' },
   { url: 'https://economictimes.indiatimes.com/mf/rssfeeds/359241701.cms', source: 'ET Mutual Funds', category: 'Mutual Funds' },
-  { url: 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms', source: 'ET Markets', category: 'Markets' },
-  { url: 'https://www.business-standard.com/rss/markets-106.rss', source: 'Business Standard', category: 'Markets' },
+  { url: 'https://economictimes.indiatimes.com/wealth/rssfeeds/837555174.cms', source: 'ET Wealth', category: 'Personal Finance' },
+  { url: 'https://www.livemint.com/rss/money', source: 'Mint Money', category: 'Financial Planning' },
+  { url: 'https://freefincal.com/feed/', source: 'Freefincal', category: 'Investing & Research' },
+  { url: 'https://www.capitalmind.in/feed/', source: 'Capitalmind', category: 'Markets & Learning' },
 ];
+
+const NOISE_RE = /\b(adjudication|recovery certificate|settlement order|show cause|penalty|impound|debar|insider trading|intraday|upper circuit|lower circuit|buy\/sell|target price|sensex jumps|nifty surges|stock tips|multibagger)\b/i;
 
 const decode = (s: string) =>
   s
@@ -37,21 +39,21 @@ function parse(xml: string, f: (typeof FEEDS)[number]): FeedItem[] {
   const items: FeedItem[] = [];
   const re = /<item[\s>]([\s\S]*?)<\/item>/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(xml)) && items.length < 10) {
+  while ((m = re.exec(xml)) && items.length < 12) {
     const title = tag(m[1], 'title');
+    if (!title || NOISE_RE.test(title)) continue;
     const link = tag(m[1], 'link') || (m[1].match(/<link[^>]*href="([^"]+)"/)?.[1] ?? '');
-    // RBI dates carry no zone (IST); treat zone-less dates as +05:30.
     let raw = tag(m[1], 'pubDate') || tag(m[1], 'dc:date');
     if (raw && !/(Z|GMT|UTC|[+-]\d{2}:?\d{2})\s*$/i.test(raw)) raw += ' +0530';
     const d = new Date(raw || Date.now());
-    if (!title || !/^https?:\/\//.test(link)) continue;
+    if (!/^https?:\/\//.test(link)) continue;
     items.push({ title, link, source: f.source, category: f.category, published: isNaN(+d) ? new Date().toISOString() : d.toISOString() });
   }
   return items;
 }
 
 export async function loadFeeds(ctx: ExecutionContext): Promise<FeedItem[]> {
-  const cacheKey = new Request('https://cache.internal/feeds-v2');
+  const cacheKey = new Request('https://cache.internal/feeds-v3');
   const cache = (caches as unknown as { default: Cache }).default;
   const hit = await cache.match(cacheKey);
   if (hit) return hit.json();

@@ -1,11 +1,10 @@
-﻿import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../shared/api';
-import { CATEGORIES, ErrorBox, Markdown, Progress, Spinner, ago, fmtDate, useLoad } from '../shared/components';
+import { CATEGORIES, ErrorBox, Markdown, Progress, Spinner, ThemeSettings, ago, fmtDate, useLoad } from '../shared/components';
 import { Player, thumb } from '../shared/Player';
 import { FlipBook } from '../shared/FlipBook';
 import { useAuth } from './App';
-import { sectionInfo, teamUi } from './teams';
 
 const hrs = (m: number) => (m >= 60 ? `${Math.round((m / 60) * 10) / 10} h` : `${m} min`);
 const kindIcon = (k: string) => (k === 'video' ? '▶' : k === 'link' ? '🔗' : '📄');
@@ -13,19 +12,30 @@ const kindIcon = (k: string) => (k === 'video' ? '▶' : k === 'link' ? '🔗' :
 /* ------------------------------------------------------------------ Login */
 export function Login() {
   const { setUser } = useAuth();
-  const TEAMS = ['MF Onboarding', 'MF Digital', 'MF Silver', 'MF Gold', 'MF Platinum', 'Equity Onboarding', 'Equity Regular', 'Customer Support', 'Training & Quality'];
-  const [f, setF] = useState(() => { let team = ''; try { team = localStorage.getItem('fi_team') || ''; } catch { /* private mode */ } return { userId: '', password: '', team }; });
+  const [f, setF] = useState({ userId: '', password: '' });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [show, setShow] = useState(false);
+  const [step, setStep] = useState(0);
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
+
+  useEffect(() => {
+    const t = setInterval(() => setStep((s) => (s + 1) % 3), 3600);
+    return () => clearInterval(t);
+  }, []);
+
+  const milestones = [
+    { label: 'NISM V-A & Advisory Readiness', pct: 88, note: 'Chapter notes · 20 full mock tests' },
+    { label: 'Product Mastery: MF, Bonds, SIF & PMS', pct: 74, note: '250+ advisor FAQs & call scripts' },
+    { label: 'Daily Learning Streak', pct: 95, note: '5 min a day compounds over time' },
+  ];
+  const cur = milestones[step];
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setErr(''); setBusy(true);
     try {
-      const r = await api.post('/api/auth/login', { userId: f.userId, password: f.password, team: f.team });
-      try { localStorage.setItem('fi_team', f.team); } catch { /* ignore */ }
+      const r = await api.post('/api/auth/login', { userId: f.userId, password: f.password });
       const me = await api.get('/api/auth/me').catch(() => null);
       setUser(me?.user ? { ...me.user, cats: me.cats } : r.user);
     } catch (x: any) { setErr(x.message); } finally { setBusy(false); }
@@ -34,6 +44,15 @@ export function Login() {
   return (
     <div className="auth">
       <div className="art" style={{ backgroundImage: 'url(/login-hero.jpg)' }}>
+        <div className="hero-card">
+          <div className="row between small" style={{ opacity: .85, marginBottom: 4 }}>
+            <span>FundsIndia Learning Track</span>
+            <span>{cur.pct}%</span>
+          </div>
+          <div style={{ fontWeight: 700, fontSize: '1.05rem', transition: 'opacity .4s ease' }}>{cur.label}</div>
+          <div className="small" style={{ opacity: .82, marginTop: 2 }}>{cur.note}</div>
+          <div className="hero-bar"><div style={{ width: `${cur.pct}%` }} /></div>
+        </div>
         <div className="brandbar" style={{ width: 80 }} />
         <h1>Learn. Certify. Advise with confidence.</h1>
         <p style={{ maxWidth: 460, opacity: .92 }}>NISM preparation, FundsIndia Academy videos, sales & service skills, Zoho CRM and Tata Tele guides, and daily market updates — in one place for the FundsIndia team.</p>
@@ -42,7 +61,7 @@ export function Login() {
         <form className="box stack" onSubmit={submit} autoComplete="on">
           <img src="/logo.png" alt="FundsIndia" style={{ height: 44 }} />
           <div><h1 style={{ marginBottom: 4 }}>Learner sign-in</h1>
-            <div className="muted small">Accounts are created by your administrator. Sign in with your User ID, password and the team you belong to — what you see depends on your team.</div></div>
+            <div className="muted small">Sign in with your User ID and password. Your team access is applied automatically by your administrator.</div></div>
           <div><label className="f" htmlFor="uid">User ID</label><input id="uid" value={f.userId} onChange={set('userId')} required autoComplete="username" placeholder="Employee ID or work e-mail" autoCapitalize="none" spellCheck={false} /></div>
           <div><label className="f">Password</label>
             <div style={{ position: 'relative' }}>
@@ -50,11 +69,10 @@ export function Login() {
               <button type="button" className="btn sm ghost" style={{ position: 'absolute', right: 6, top: 6 }} onClick={() => setShow(!show)}>{show ? 'Hide' : 'Show'}</button>
             </div>
           </div>
-          <div><label className="f" htmlFor="team">Team</label>
-            <select id="team" value={f.team} onChange={set('team')} required><option value="" disabled>Select your team</option>{TEAMS.map((t) => <option key={t} value={t}>{t}</option>)}</select></div>
           {err && <div className="alert err" role="alert">{err}</div>}
-          <button className="btn primary" style={{ width: '100%', padding: 14 }} disabled={busy || !f.team}>{busy ? 'Please wait…' : 'Sign in'}</button>
+          <button className="btn primary" style={{ width: '100%', padding: 14 }} disabled={busy}>{busy ? 'Please wait…' : 'Sign in'}</button>
           <div className="muted small center">🔒 Internal use only. Your progress and data are private to your account and are kept when you sign out.</div>
+          <div className="muted small center" style={{ fontSize: '.75rem', opacity: .85 }}>Planned, designed, and developed by Rajesh Chakravarthi Rao</div>
         </form>
       </div>
     </div>
@@ -150,16 +168,31 @@ export function Dashboard() {
       <div className="hero">
         <div className="brandbar" />
         <h1>{hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'}, {user?.name.split(' ')[0]} 👋</h1>
-        <p><b>{teamUi(user?.team).headline}.</b> {teamUi(user?.team).blurb}{s.streak > 1 ? ` You're on a ${s.streak}-day learning streak.` : ''}</p>
+        <p>{s.streak > 1 ? `You're on a ${s.streak}-day learning streak — keep it going!` : 'A little learning every day compounds. Pick up where you left off, or start a learning path.'}</p>
         <div className="row wrap" style={{ marginTop: 18 }}>
           {d.data.watching[0] ? <Link className="btn primary" to={'/lessons/' + d.data.watching[0].id}>▶ Resume: {d.data.watching[0].title.slice(0, 46)}</Link> : <Link className="btn primary" to="/paths">🧭 Start a learning path</Link>}
           <Link className="btn" to="/courses">Browse library</Link>
+          {d.data.missedCount > 0 && <Link className="btn" to="/revision">🔁 Revise {d.data.missedCount} missed Qs</Link>}
         </div>
       </div>
 
-      <div className="grid g4">{tiles.map(([ic, n, l]) => <div key={l} className="card stat"><div className="ic">{ic}</div><div><b>{n}</b><span>{l}</span></div></div>)}</div>
+      {d.data.assignments?.length > 0 && (
+        <div className="card">
+          <h2 style={{ marginTop: 0 }}>⏰ Assigned deadlines</h2>
+          {d.data.assignments.map((a: any) => {
+            const overdue = a.due_date < new Date().toISOString().slice(0, 10);
+            return (
+              <Link key={a.id} to={a.target_kind === 'path' ? `/paths/${a.target_id}` : `/courses/${a.target_id}`} className="lesson-row">
+                <span className={'badge ' + (overdue ? 'r' : 'w')}>{overdue ? 'Overdue' : 'Due ' + fmtDate(a.due_date)}</span>
+                <span className="grow"><b>{a.title}</b></span>
+                <span className="btn sm primary">Open →</span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
 
-      <FocusCards team={user?.team} courses={cs.data?.courses || []} />
+      <div className="grid g4">{tiles.map(([ic, n, l]) => <div key={l} className="card stat"><div className="ic">{ic}</div><div><b>{n}</b><span>{l}</span></div></div>)}</div>
 
       {d.data.watching.length > 0 && (
         <div><h2>Continue watching</h2>
@@ -211,6 +244,38 @@ export function Dashboard() {
       {popular.length > 0 && (<div>
         <div className="row between"><h2>Popular courses</h2><Link to="/courses" className="small">Browse all →</Link></div>
         <div className="grid g4">{popular.map((c: any) => <CourseCard key={c.id} c={c} />)}</div></div>)}
+
+      <div className="card">
+        <div className="row between" style={{ marginBottom: 12 }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Advisor Quick Reference & Compliance Desk</h2>
+            <div className="muted small">Essential regulatory thresholds and product benchmarks for client conversations</div>
+          </div>
+          <Link to="/faq" className="btn sm">View 68 Product FAQs →</Link>
+        </div>
+        <div className="grid g4">
+          <div style={{ padding: 12, borderRadius: 10, background: 'var(--bg-soft, rgba(29,111,242,.05))', border: '1px solid var(--line, rgba(0,0,0,.07))' }}>
+            <div className="badge" style={{ marginBottom: 6 }}>NISM Certification</div>
+            <div style={{ fontWeight: 700, fontSize: '.92rem' }}>50%–60% Passing Mark</div>
+            <div className="muted small" style={{ marginTop: 4 }}>NISM V-A (50%, no negative), Series VIII & XXI-A (60%, 0.25 negative). Valid for 3 years; renew before expiry via CPE or exam.</div>
+          </div>
+          <div style={{ padding: 12, borderRadius: 10, background: 'var(--bg-soft, rgba(29,111,242,.05))', border: '1px solid var(--line, rgba(0,0,0,.07))' }}>
+            <div className="badge g" style={{ marginBottom: 6 }}>Minimum Tickets</div>
+            <div style={{ fontWeight: 700, fontSize: '.92rem' }}>MF · SIF · PMS · AIF</div>
+            <div className="muted small" style={{ marginTop: 4 }}>Mutual Funds ₹100+ SIP · SIF (Specialised Investment Fund) ₹10 Lakh · PMS ₹50 Lakh · AIF Cat I/II/III ₹1 Crore.</div>
+          </div>
+          <div style={{ padding: 12, borderRadius: 10, background: 'var(--bg-soft, rgba(29,111,242,.05))', border: '1px solid var(--line, rgba(0,0,0,.07))' }}>
+            <div className="badge m" style={{ marginBottom: 6 }}>Equity & Debt Tax</div>
+            <div style={{ fontWeight: 700, fontSize: '.92rem' }}>STCG 20% · LTCG 12.5%</div>
+            <div className="muted small" style={{ marginTop: 4 }}>Equity MFs (&gt;65% equity): STCG ≤12m at 20%, LTCG &gt;12m at 12.5% above ₹1.25L/FY. Debt MFs taxed at investor slab rate.</div>
+          </div>
+          <div style={{ padding: 12, borderRadius: 10, background: 'var(--bg-soft, rgba(29,111,242,.05))', border: '1px solid var(--line, rgba(0,0,0,.07))' }}>
+            <div className="badge w" style={{ marginBottom: 6 }}>Advisor Conduct</div>
+            <div style={{ fontWeight: 700, fontSize: '.92rem' }}>Suitability & Disclosure</div>
+            <div className="muted small" style={{ marginTop: 4 }}>Never assure fixed returns on market-linked products. Match Risk-o-Meter, horizon, and liquidity before recommending.</div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -278,15 +343,29 @@ export function Courses() {
   const order = Object.keys(CATEGORIES);
   const cats = ['all', ...order.filter((k) => r.data.courses.some((c: any) => c.category === k))];
   const grouped = order.map((k) => [k, list.filter((c: any) => c.category === k)] as const).filter(([, v]) => v.length);
+  const catDesc: Record<string, string> = {
+    academy: 'Core investment foundations, mutual fund structures, asset allocation, taxation, and FundsIndia platform onboarding.',
+    nism: 'Structured NISM exam prep modules, chapter notes, mock tests with negative marking, and compliance workbooks.',
+    sales: 'Client advisory frameworks, objection handling, SIP step-up pitch, portfolio review scripts, and service SLAs.',
+    tools: 'Hands-on walkthroughs for Zoho CRM, Tata Tele dialer disposition, ticket hygiene, and call quality benchmarks.',
+    process: 'Standard Operating Procedures (SOPs), KYC/re-KYC checklists, audit guidelines, and compliance escalation workflows.',
+  };
   return (
     <div className="stack">
-      <h1>Course library</h1>
+      <div>
+        <h1 style={{ marginBottom: 4 }}>Course library</h1>
+        <p className="muted" style={{ margin: 0 }}>Role-curated video lessons, study notes, and certification practice tailored for your team.</p>
+      </div>
       <div className="row wrap">
         {cats.map((k) => <button key={k} className={'chip' + (cat === k ? ' on' : '')} onClick={() => setSp(k === 'all' ? {} : { cat: k })}>{k === 'all' ? 'All' : CATEGORIES[k]}</button>)}
         <span className="grow" /><input style={{ maxWidth: 260 }} placeholder="Filter…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Filter courses" />
       </div>
       {!list.length ? <div className="muted">No courses match.</div> : grouped.map(([k, cs]) => (
-        <div key={k}><h2>{CATEGORIES[k]}</h2><div className="grid g3">{cs.map((c: any) => <CourseCard key={c.id} c={c} />)}</div></div>))}
+        <div key={k}>
+          <h2 style={{ marginBottom: 4 }}>{CATEGORIES[k]}</h2>
+          {catDesc[k] && <p className="muted small" style={{ marginTop: 0, marginBottom: 14 }}>{catDesc[k]}</p>}
+          <div className="grid g3">{cs.map((c: any) => <CourseCard key={c.id} c={c} />)}</div>
+        </div>))}
     </div>
   );
 }
@@ -459,7 +538,6 @@ function DocLibrary({ course, modules, lessons }: { course: any; modules: any[];
           <input style={{ maxWidth: 300 }} placeholder="Search documents…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search documents" />
         </div>
       </div>
-      <FeedbackBox courseId={course.id} />
       {!groups.length && <div className="card muted">No documents match “{q}”.</div>}
       {groups.map(({ m, items }) => (
         <div className="card" key={m.id}>
@@ -488,15 +566,14 @@ function DocPage({ lesson, course, module, prev, next, side }: { lesson: any; co
           <div className="card">
             <div className="row between wrap no-print" style={{ marginBottom: 8 }}>
               <span className="badge">{module ? module.title : course.title}</span>
-              <span className="small muted">Read-only reference</span>
             </div>
             <Markdown text={lesson.body && lesson.body.startsWith('# ') ? lesson.body : `# ${lesson.title}\n\n${lesson.body || ''}`} />
           </div>
-          <FeedbackBox lessonId={lesson.id} />
           <div className="row wrap between no-print">
             {prev ? <Link className="btn" to={'/lessons/' + prev.id}>← {prev.title.length > 38 ? prev.title.slice(0, 38) + '…' : prev.title}</Link> : <span />}
             {next ? <Link className="btn primary" to={'/lessons/' + next.id}>{next.title.length > 38 ? next.title.slice(0, 38) + '…' : next.title} →</Link> : <Link className="btn" to={'/courses/' + course.id}>Back to all documents</Link>}
           </div>
+          <FeedbackBar />
         </div>
         <aside className="card contents no-print" aria-label="Documents">
           <h3 style={{ padding: '0 10px' }}>{course.title}</h3>
@@ -571,7 +648,7 @@ export function LessonView() {
             {l.kind === 'link' && l.url && <p><a className="btn primary" href={l.url} target="_blank" rel="noopener noreferrer">Open resource ↗</a></p>}
             {l.body && <div style={{ marginTop: 18 }}><Markdown text={l.kind === 'note' && !l.body.startsWith('# ') ? `# ${l.title}\n\n${l.body}` : l.body} /></div>}
           </div>
-          <FeedbackBox lessonId={l.id} />
+          <BookmarkNote lessonId={l.id} />
           <div className="row wrap between">
             <span className="muted small">Step {position} of {total}</span>
             <div className="row wrap">
@@ -579,6 +656,7 @@ export function LessonView() {
               {next ? <button className="btn primary" onClick={() => toggle(true)}>Complete & next →</button> : <Link className="btn primary" to={path ? '/paths/' + path.id : '/courses/' + course.id}>{path ? 'Back to path' : 'Back to course'}</Link>}
             </div>
           </div>
+          <FeedbackBar />
         </div>
         <aside className="card contents" aria-label="Course contents">
           <h3 style={{ padding: '0 10px' }}>{path ? path.title : 'Course contents'}</h3>
@@ -606,13 +684,15 @@ export function QuizRunner() {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [flags, setFlags] = useState<Record<string, boolean>>({});
+  const [visited, setVisited] = useState<Record<string, boolean>>({});
+  const [simMode, setSimMode] = useState(true);
   const submitted = useRef(false);
 
   async function start(n?: number) {
     setErr(''); setBusy(true);
     try {
       const r = await api.post(`/api/quizzes/${id}/start${n ? '?n=' + n : ''}`);
-      setSess(r); setAns({}); setFlags({}); setCur(0); setResult(null); submitted.current = false;
+      setSess(r); setAns({}); setFlags({}); setVisited(r.questions[0] ? { [r.questions[0].id]: true } : {}); setCur(0); setResult(null); submitted.current = false;
       setLeft(r.quiz.minutes * 60);
     } catch (x: any) { setErr(x.message); } finally { setBusy(false); }
   }
@@ -628,29 +708,50 @@ export function QuizRunner() {
     return () => clearInterval(t);
   }, [sess, result]);
   useEffect(() => { if (sess && !result && left <= 0) submit(); /* auto-submit */ }, [left]); // eslint-disable-line
+  useEffect(() => {
+    if (sess?.questions?.[cur]) setVisited((v) => ({ ...v, [sess.questions[cur].id]: true }));
+  }, [cur, sess]);
 
   if (result) return <QuizResult r={result} retake={() => start()} id={id!} />;
   if (!sess) {
     return (
-      <div className="card stack" style={{ maxWidth: 640 }}>
+      <div className="card stack" style={{ maxWidth: 680 }}>
         <div className="brandbar" /><h1>Ready to begin?</h1>
         <ul className="muted">
           <li>Practice quizzes draw random questions from the bank; mock tests serve the full paper in random order.</li>
-          <li>The timer starts immediately and the quiz auto-submits at zero.</li>
-          <li>Where an exam carries negative marking it is shown on the results page — unanswered questions always score zero.</li><li>Use ⚑ Mark for review to flag questions and come back to them before submitting.</li>
+          <li>The countdown timer starts immediately and auto-submits at zero.</li>
+          <li>Where an exam carries negative marking it is shown on the results page — unanswered questions always score zero.</li>
+          <li>Use <b>Mark for Review</b> and the <b>Question Palette</b> to track Answered, Flagged, and Not Visited questions.</li>
           <li>Correct answers and explanations are shown after you submit.</li>
         </ul>
+        <div className="row wrap">
+          <button type="button" className={'chip' + (simMode ? ' on' : '')} onClick={() => setSimMode(true)}>🎯 Full-Exam Timed Simulator</button>
+          <button type="button" className={'chip' + (!simMode ? ' on' : '')} onClick={() => setSimMode(false)}>📝 Standard Quiz Mode</button>
+        </div>
         {err && <ErrorBox error={err} />}
-        <div className="row"><button className="btn primary" disabled={busy} onClick={() => start()}>{busy ? 'Starting…' : 'Start quiz'}</button><button className="btn" onClick={() => history.back()}>Cancel</button></div>
+        <div className="row wrap"><button className="btn primary" disabled={busy} onClick={() => start()}>{busy ? 'Starting…' : simMode ? 'Start Timed Exam Simulator' : 'Start quiz'}</button><button className="btn" onClick={() => history.back()}>Cancel</button></div>
       </div>
     );
   }
   const q = sess.questions[cur];
   const answered = Object.keys(ans).length;
+  const flaggedCount = Object.values(flags).filter(Boolean).length;
+  const visitedNotAns = sess.questions.filter((x: any) => visited[x.id] && ans[x.id] === undefined).length;
+  const notVisited = sess.questions.length - Object.keys(visited).length;
+  const nextOrSubmit = () => {
+    if (cur < sess.questions.length - 1) setCur(cur + 1);
+    else if (answered === sess.questions.length || confirm(`${sess.questions.length - answered} question(s) unanswered. Submit exam now?`)) submit();
+  };
   return (
-    <div className="grid" style={{ gridTemplateColumns: 'minmax(0,1fr) 270px', alignItems: 'start' }}>
+    <div className="quiz-grid">
       <div className="card stack">
-        <div className="row between wrap"><b>{sess.quiz.title}</b><span className={'badge ' + (left < 60 ? 'r' : '')} aria-live="off">⏱ {mmss(Math.max(0, left))}</span></div>
+        <div className="row between wrap">
+          <div>
+            <b>{sess.quiz.title}</b>
+            {simMode && <span className="badge" style={{ marginLeft: 8 }}>Exam Simulator</span>}
+          </div>
+          <span className={'badge ' + (left < 120 ? 'r' : 'g')} style={{ fontSize: '.9rem', padding: '5px 14px' }} aria-live="off">⏱ {mmss(Math.max(0, left))}</span>
+        </div>
         <div className="muted small">Question {cur + 1} of {sess.questions.length}</div>
         <h2 style={{ fontWeight: 600 }}>{q.question}</h2>
         <div role="radiogroup">
@@ -660,18 +761,38 @@ export function QuizRunner() {
             </button>
           ))}
         </div>
-        <div className="row">{ans[q.id] !== undefined && <button className="btn sm ghost" onClick={() => { const a = { ...ans }; delete a[q.id]; setAns(a); }}>Clear answer</button>}<button className={'btn sm ' + (flags[q.id] ? 'good' : 'ghost')} onClick={() => setFlags({ ...flags, [q.id]: !flags[q.id] })}>⚑ {flags[q.id] ? 'Marked for review' : 'Mark for review'}</button></div>
+        <div className="row wrap">
+          {ans[q.id] !== undefined && <button className="btn sm ghost" onClick={() => { const a = { ...ans }; delete a[q.id]; setAns(a); }}>Clear response</button>}
+          <button className={'btn sm ' + (flags[q.id] ? 'good' : 'ghost')} onClick={() => setFlags({ ...flags, [q.id]: !flags[q.id] })}>⚑ {flags[q.id] ? 'Marked for review' : 'Mark for review'}</button>
+          {simMode && cur < sess.questions.length - 1 && (
+            <button className="btn sm" onClick={() => { setFlags({ ...flags, [q.id]: true }); setCur(cur + 1); }}>⚑ Mark &amp; Next →</button>
+          )}
+        </div>
         {err && <ErrorBox error={err} />}
-        <div className="row between">
+        <div className="row between wrap">
           <button className="btn" disabled={cur === 0} onClick={() => setCur(cur - 1)}>← Previous</button>
-          {cur < sess.questions.length - 1 ? <button className="btn primary" onClick={() => setCur(cur + 1)}>Next →</button>
-            : <button className="btn good" disabled={busy} onClick={() => { if (answered === sess.questions.length || confirm(`${sess.questions.length - answered} question(s) unanswered. Submit anyway?`)) submit(); }}>Submit</button>}
+          {cur < sess.questions.length - 1
+            ? <button className="btn primary" onClick={nextOrSubmit}>{simMode ? 'Save & Next →' : 'Next →'}</button>
+            : <button className="btn good" disabled={busy} onClick={nextOrSubmit}>Submit Exam</button>}
         </div>
       </div>
-      <div className="card">
-        <b>Questions</b><div className="muted small" style={{ margin: '4px 0 12px' }}>{answered}/{sess.questions.length} answered{Object.values(flags).filter(Boolean).length ? ` · ${Object.values(flags).filter(Boolean).length} flagged` : ''}{sess.quiz.negative > 0 ? ` · −${sess.quiz.negative} per wrong answer` : ''}</div>
-        <div className="qnav">{sess.questions.map((x: any, i: number) => <button key={x.id} className={(ans[x.id] !== undefined ? 'done ' : '') + (flags[x.id] ? 'flag ' : '') + (i === cur ? 'cur' : '')} onClick={() => setCur(i)}>{i + 1}</button>)}</div>
-        <button className="btn good" style={{ width: '100%', marginTop: 16 }} disabled={busy} onClick={() => { if (confirm('Submit your answers now?')) submit(); }}>Submit quiz</button>
+      <div className="card stack" style={{ gap: 12 }}>
+        <div>
+          <b>Question Palette</b>
+          <div className="muted small" style={{ marginTop: 4 }}>
+            {answered}/{sess.questions.length} answered{sess.quiz.negative > 0 ? ` · −${sess.quiz.negative} negative` : ''}
+          </div>
+        </div>
+        {simMode && (
+          <div className="grid g2 small" style={{ gap: 6 }}>
+            <span className="badge g">✓ {answered} Answered</span>
+            <span className="badge w">⚑ {flaggedCount} Review</span>
+            <span className="badge m">○ {visitedNotAns} Skipped</span>
+            <span className="badge">□ {notVisited} Unseen</span>
+          </div>
+        )}
+        <div className="qnav">{sess.questions.map((x: any, i: number) => <button key={x.id} className={(ans[x.id] !== undefined ? 'done ' : visited[x.id] ? 'seen ' : '') + (flags[x.id] ? 'flag ' : '') + (i === cur ? 'cur' : '')} onClick={() => setCur(i)}>{i + 1}</button>)}</div>
+        <button className="btn good" style={{ width: '100%' }} disabled={busy} onClick={() => { if (confirm('Submit your answers now?')) submit(); }}>Submit {simMode ? 'Exam' : 'quiz'}</button>
       </div>
     </div>
   );
@@ -744,31 +865,30 @@ export function Updates() {
   );
 }
 
-/* ------------------------------------------------------------------ Account */
-export function SettingsPage() {
+/* ------------------------------------------------------------------ Settings & Account */
+export function Account() {
   const { user, logout } = useAuth();
   const certs = useLoad(() => api.get('/api/certificates'));
   const att = useLoad(() => api.get('/api/attempts'));
-  const ui = teamUi(user?.team);
   return (
     <div className="stack">
-      <h1>Settings</h1>
+      <h1>Settings & profile</h1>
       <div className="grid g2" style={{ alignItems: 'start' }}>
         <div className="card">
           <div className="brandbar" />
-          <h2 style={{ margin: 0 }}>{user?.name}</h2>
+          <h2>{user?.name}</h2>
           <div className="muted">{user?.email}</div>
-          <div className="row wrap" style={{ margin: '12px 0' }}>
-            {user?.team && <span className="badge">{user.team}</span>}
-            {user?.empId && <span className="badge m">User ID {user.empId}</span>}
-            {user?.department && <span className="badge m">{user.department}</span>}
-          </div>
-          {user?.team && <div className="small muted"><b>Your team's focus:</b> {ui.blurb}</div>}
+          {user?.empId && <div className="small" style={{ marginTop: 6 }}>User ID: <b>{user.empId}</b></div>}
+          {user?.department && <div className="small">Department: {user.department}</div>}
+          {user?.team && <div className="small" style={{ marginTop: 4 }}>Team: <span className="badge">{user.team}</span></div>}
           <div className="alert ok" style={{ marginTop: 16 }}>🔒 Your progress, quiz scores and certificates are private to your account.</div>
-          <button className="btn" style={{ marginTop: 12 }} onClick={logout}>Sign out</button>
+          <button className="btn danger" style={{ marginTop: 8 }} onClick={logout}>Sign out</button>
         </div>
         <div className="card"><h2>Change password</h2><PasswordForm /></div>
       </div>
+      <div className="card"><h2>Appearance & UI color</h2><ThemeSettings /></div>
+      <ContactPage embedded />
+      <BookmarksList />
       <div className="card"><h2>Certificates</h2>
         {!certs.data?.certificates.length ? <div className="muted">Pass a final exam to earn a certificate.</div> :
           certs.data.certificates.map((c: any) => <div key={c.id} className="lesson-row"><span className="kind">🏅</span><span className="grow"><b>{c.title}</b><div className="small muted">{c.id} · {c.pct}% · {fmtDate(c.issued_at)}</div></span><Link className="btn sm" to={'/certificate/' + c.id}>View</Link></div>)}
@@ -783,112 +903,34 @@ export function SettingsPage() {
   );
 }
 
-/* ------------------------------------------------------------------ Team focus, feedback and contact */
-function FocusCards({ team, courses }: { team?: string | null; courses: any[] }) {
-  const ui = teamUi(team);
-  const ids = new Set(courses.map((c: any) => c.id));
-  const cards = ui.focus.filter((f) => (f.course ? ids.has(f.course) : f.cat === 'contact' || courses.some((c: any) => c.category === f.cat)));
-  if (!cards.length) return null;
-  return (
-    <div>
-      <h2>Your focus{team ? ` · ${team}` : ''}</h2>
-      <div className="grid g4">
-        {cards.map((f) => (
-          <Link key={f.title} to={f.course ? '/courses/' + f.course : f.cat === 'contact' ? '/contact' : '/courses?cat=' + f.cat} className="card link flat" style={{ padding: 16 }}>
-            <div style={{ fontSize: 26 }} aria-hidden>{f.icon}</div>
-            <div style={{ fontWeight: 800, margin: '8px 0 4px' }}>{f.title}</div>
-            <div className="muted small">{f.text}</div>
-          </Link>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/** "Was this helpful?" box shown under every lesson, document and course. Feedback goes to the admin portal. */
-export function FeedbackBox({ lessonId, courseId }: { lessonId?: string; courseId?: string }) {
-  const [rating, setRating] = useState(0);
-  const [msg, setMsg] = useState('');
-  const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle');
-  const [err, setErr] = useState('');
-  useEffect(() => { setRating(0); setMsg(''); setState('idle'); setErr(''); }, [lessonId, courseId]);
-  async function send(e: FormEvent) {
-    e.preventDefault();
-    if (!rating) { setErr('Please choose a rating from 1 to 5 stars.'); return; }
-    setErr(''); setState('busy');
-    try { await api.post('/api/feedback', { lessonId, courseId, rating, message: msg }); setState('done'); }
-    catch (x: any) { setErr(x.message); setState('idle'); }
-  }
-  if (state === 'done') return <div className="card no-print"><b>Thank you!</b> <span className="muted">Your feedback has reached the training team.</span></div>;
-  return (
-    <form className="card no-print" onSubmit={send} aria-label="Feedback">
-      <h3 style={{ marginTop: 0 }}>Was this helpful?</h3>
-      <div className="row" role="radiogroup" aria-label="Rating" style={{ gap: 4 }}>
-        {[1, 2, 3, 4, 5].map((n) => (
-          <button type="button" key={n} role="radio" aria-checked={rating === n} aria-label={n + ' star' + (n > 1 ? 's' : '')} onClick={() => setRating(n)}
-            style={{ background: 'none', border: 0, fontSize: 28, cursor: 'pointer', lineHeight: 1, color: n <= rating ? '#f5a524' : 'var(--mut)', padding: 2 }}>{n <= rating ? '★' : '☆'}</button>
-        ))}
-      </div>
-      <textarea rows={3} maxLength={1500} placeholder="Anything unclear, missing or wrong? (optional)" value={msg} onChange={(e) => setMsg(e.target.value)} style={{ marginTop: 10 }} aria-label="Your feedback" />
-      {err && <div className="alert err" role="alert" style={{ marginTop: 8 }}>{err}</div>}
-      <button className="btn primary sm" style={{ marginTop: 10 }} disabled={state === 'busy'}>{state === 'busy' ? 'Sending…' : 'Send feedback'}</button>
-    </form>
-  );
-}
-
-export function ContactPage() {
-  const { user } = useAuth();
-  const [f, setF] = useState({ category: 'issue', subject: '', message: '' });
-  const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle');
-  const [err, setErr] = useState('');
-  const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
-  async function send(e: FormEvent) {
-    e.preventDefault(); setErr(''); setState('busy');
-    try { await api.post('/api/contact', f); setState('done'); setF({ category: 'issue', subject: '', message: '' }); }
-    catch (x: any) { setErr(x.message); setState('idle'); }
-  }
-  return (
-    <div className="stack" style={{ maxWidth: 720 }}>
-      <div><h1>Contact us</h1><p className="muted" style={{ margin: 0 }}>Report a problem, ask for content to be added or corrected, or tell us what would help your team. It goes straight to the admin and training team.</p></div>
-      {state === 'done' && <div className="alert ok" role="status">Thank you — your message has been sent. The team will review it.</div>}
-      <form className="card stack" onSubmit={send}>
-        <div className="muted small">Sending as <b>{user?.name}</b>{user?.team ? ` · ${user.team}` : ''}</div>
-        <div><label className="f" htmlFor="cat">What is this about?</label>
-          <select id="cat" value={f.category} onChange={set('category')}>
-            <option value="issue">A problem with the portal or a video</option>
-            <option value="content">Content is unclear, missing or wrong</option>
-            <option value="access">I cannot see a course I need</option>
-            <option value="suggestion">A suggestion</option>
-            <option value="other">Something else</option>
-          </select></div>
-        <div><label className="f" htmlFor="subj">Subject</label><input id="subj" value={f.subject} onChange={set('subject')} required maxLength={120} /></div>
-        <div><label className="f" htmlFor="msg">Message</label><textarea id="msg" rows={6} value={f.message} onChange={set('message')} required minLength={5} maxLength={2000} /></div>
-        {err && <div className="alert err" role="alert">{err}</div>}
-        <div><button className="btn primary" disabled={state === 'busy'}>{state === 'busy' ? 'Sending…' : 'Send message'}</button></div>
-      </form>
-    </div>
-  );
-}
-
 export function CertificateView() {
   const { id } = useParams();
   const r = useLoad(() => api.get('/api/certificates'));
   if (r.loading) return <Spinner />;
   const c = r.data?.certificates.find((x: any) => x.id === id);
   if (!c) return <ErrorBox error="Certificate not found." />;
+  const b = r.data?.branding || {};
+  const accent = b.accentColor || '#1d6ff2';
   return (
     <div className="stack">
-      <div className="no-print row"><Link className="btn" to="/settings">← Back to settings</Link></div>
-      <div className="cert">
+      <div className="no-print row"><Link className="btn" to="/account">Back</Link></div>
+      <div className="cert" style={{ borderColor: accent }}>
         <img src="/logo.png" alt="FundsIndia" style={{ height: 56 }} />
-        <div style={{ letterSpacing: '.3em', color: '#1d6ff2', marginTop: 24 }}>CERTIFICATE OF COMPLETION</div>
+        <div style={{ letterSpacing: '.3em', color: accent, marginTop: 24, fontWeight: 800 }}>{b.title || 'CERTIFICATE OF COMPLETION'}</div>
+        {b.subtitle && <div className="small" style={{ color: '#65748b', marginTop: 4 }}>{b.subtitle}</div>}
         <div style={{ margin: '28px 0 8px' }}>This is to certify that</div>
         <div style={{ fontSize: '2.4rem', fontWeight: 700 }}>{r.data.holder}</div>
         <div style={{ margin: '16px 0 4px' }}>has successfully completed</div>
         <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{c.title}</div>
         <div style={{ margin: '6px 0 28px' }}>with a score of <b>{c.pct}%</b> on {fmtDate(c.issued_at)}</div>
+        {b.signatoryName && (
+          <div style={{ margin: '18px 0 20px' }}>
+            <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>{b.signatoryName}</div>
+            {b.signatoryTitle && <div className="small" style={{ color: '#65748b' }}>{b.signatoryTitle}</div>}
+          </div>
+        )}
         <div className="small">Certificate ID: <b>{c.id}</b><br />Verify at {location.origin}/verify/{c.id}</div>
-        <div className="small" style={{ marginTop: 18, color: '#65748b' }}>Internal training certificate issued by the FundsIndia Learning Hub. It is not an NISM/SEBI certification.</div>
+        <div className="small" style={{ marginTop: 18, color: '#65748b' }}>{b.disclaimer || 'Internal training certificate issued by the FundsIndia Learning Hub. It is not an NISM/SEBI certification.'}</div>
       </div>
     </div>
   );
@@ -904,6 +946,323 @@ export function Verify() {
         <div className="alert ok"><b>✓ Valid certificate</b><br />{r.data.name}<br />{r.data.course}<br />Score {r.data.pct}% · Issued {fmtDate(r.data.issued)}</div>
       ) : <div className="alert err">No valid certificate found for “{id}”.</div>}
     </div></div></div>
+  );
+}
+
+/* ------------------------------------------------------------------ Feedback bar (every page) & Contact page */
+export function FeedbackBar() {
+  const loc = useLocation();
+  const [rating, setRating] = useState<number>(0);
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ t: 'ok' | 'err'; s: string } | null>(null);
+
+  useEffect(() => { setMsg(null); }, [loc.pathname, loc.search]);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+    setBusy(true);
+    try {
+      await api.post('/api/feedback', { kind: 'feedback', page: loc.pathname + loc.search, rating: rating || null, message });
+      setMessage('');
+      setRating(0);
+      setMsg({ t: 'ok', s: 'Thank you! Your feedback has been sent to the administrators.' });
+    } catch (x: any) {
+      setMsg({ t: 'err', s: x.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="feedback-bar" aria-label="Page feedback">
+      <form onSubmit={submit} className="stack" style={{ gap: 12 }}>
+        <div className="row between wrap">
+          <div>
+            <b>Share feedback on this page</b>
+            <div className="muted small">Spotted an issue or have a suggestion? Let the Training & Admin team know.</div>
+          </div>
+          <div className="stars" role="group" aria-label="Rating">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button key={n} type="button" className={'star' + (rating >= n ? ' on' : '')} onClick={() => setRating(rating === n ? 0 : n)} aria-label={`${n} star`}>
+                {rating >= n ? '★' : '☆'} {n}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="row wrap" style={{ alignItems: 'stretch' }}>
+          <input
+            style={{ flex: 1, minWidth: 220 }}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Write your feedback here…"
+            required
+            minLength={3}
+            maxLength={4000}
+          />
+          <button className="btn primary" disabled={busy || message.trim().length < 3}>
+            {busy ? 'Sending…' : 'Send feedback'}
+          </button>
+        </div>
+        {msg && <div className={'alert ' + msg.t} style={{ margin: 0 }}>{msg.s}</div>}
+      </form>
+    </section>
+  );
+}
+
+export function ContactPage({ embedded = false }: { embedded?: boolean }) {
+  const { user } = useAuth();
+  const [subject, setSubject] = useState('Course or content question');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ t: 'ok' | 'err'; s: string } | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+    setBusy(true);
+    try {
+      await api.post('/api/feedback', { kind: 'contact', page: embedded ? '/account' : '/contact', subject, message });
+      setMessage('');
+      setMsg({ t: 'ok', s: 'Message sent! The Admin / Training & Quality team will review it.' });
+    } catch (x: any) {
+      setMsg({ t: 'err', s: x.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="stack" style={embedded ? undefined : { maxWidth: 760 }}>
+      {!embedded && (
+        <>
+          <h1>Contact us</h1>
+          <p className="muted" style={{ margin: 0 }}>Need help with a course, team access, NISM preparation, or a technical issue? Send a message directly to the administrators.</p>
+        </>
+      )}
+      <div className="card">
+        {embedded ? <h2 style={{ marginTop: 0 }}>Contact Admin & Training Team</h2> : <div className="brandbar" />}
+        <div className="small muted" style={{ marginBottom: 14 }}>Need help with a course, team access, or NISM prep? Sending as <b>{user?.name}</b> ({user?.email}{user?.team ? ` · ${user.team}` : ''})</div>
+        <form onSubmit={submit} className="stack">
+          <div>
+            <label className="f" htmlFor="csubj">Topic</label>
+            <select id="csubj" value={subject} onChange={(e) => setSubject(e.target.value)}>
+              <option>Course or content question</option>
+              <option>Team access / missing course</option>
+              <option>NISM exam / certificate query</option>
+              <option>Technical or video playback issue</option>
+              <option>Other</option>
+            </select>
+          </div>
+          <div>
+            <label className="f" htmlFor="cmsg">Message</label>
+            <textarea id="cmsg" style={{ fontFamily: 'inherit', minHeight: 120 }} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Describe how we can help…" required minLength={3} maxLength={4000} />
+          </div>
+          {msg && <div className={'alert ' + msg.t}>{msg.s}</div>}
+          <div><button className="btn primary" disabled={busy || message.trim().length < 3}>{busy ? 'Sending…' : 'Send message'}</button></div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ Bookmarks, Study Notes & Missed Qs Revision */
+function BookmarkNote({ lessonId }: { lessonId: string }) {
+  const [saved, setSaved] = useState(false);
+  const [note, setNote] = useState('');
+  const [msg, setMsg] = useState('');
+  useEffect(() => {
+    setMsg('');
+    api.get('/api/bookmarks/' + lessonId).then((r) => {
+      if (r.bookmark) { setSaved(true); setNote(r.bookmark.note || ''); }
+      else { setSaved(false); setNote(''); }
+    }).catch(() => {});
+  }, [lessonId]);
+
+  async function save() {
+    await api.post('/api/bookmarks/' + lessonId, { note });
+    setSaved(true);
+    setMsg('Saved ✓');
+    setTimeout(() => setMsg(''), 2000);
+  }
+  async function remove() {
+    await api.del('/api/bookmarks/' + lessonId);
+    setSaved(false);
+    setNote('');
+    setMsg('Removed');
+    setTimeout(() => setMsg(''), 2000);
+  }
+
+  return (
+    <div className="card stack" style={{ gap: 10 }}>
+      <div className="row between wrap">
+        <b>🔖 Bookmark &amp; private study note</b>
+        <div className="row">
+          {msg && <span className="badge g">{msg}</span>}
+          {saved && <button className="btn sm danger" onClick={remove}>Remove bookmark</button>}
+        </div>
+      </div>
+      <textarea style={{ fontFamily: 'inherit', minHeight: 80 }} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Write your private study notes for this lesson (only visible to you)…" />
+      <div><button className="btn sm primary" onClick={save}>{saved ? 'Update bookmark & note' : '🔖 Bookmark this lesson'}</button></div>
+    </div>
+  );
+}
+
+function BookmarksList() {
+  const r = useLoad(() => api.get('/api/bookmarks'));
+  return (
+    <div className="card">
+      <h2>Bookmarks &amp; study notes</h2>
+      {r.loading ? <Spinner /> : !r.data?.bookmarks?.length ? <div className="muted">No bookmarked lessons yet.</div> : (
+        r.data.bookmarks.map((b: any) => (
+          <Link key={b.lesson_id} to={'/lessons/' + b.lesson_id} className="lesson-row">
+            <span className="kind">🔖</span>
+            <span className="grow"><b>{b.title}</b><div className="muted small">{b.course}{b.note ? ` — “${b.note.slice(0, 80)}”` : ''}</div></span>
+            <span className="btn sm">Open →</span>
+          </Link>
+        ))
+      )}
+    </div>
+  );
+}
+
+export function RevisionQuiz() {
+  const r = useLoad(() => api.post('/api/quizzes/revision/start'));
+  const [ans, setAns] = useState<Record<string, number>>({});
+  const [res, setRes] = useState<any>(null);
+  if (r.loading) return <Spinner />;
+  if (r.error) return <div className="card stack"><h1>Missed questions revision</h1><div className="alert ok">🎉 {r.error}</div><Link className="btn primary" to="/">Back to dashboard</Link></div>;
+  if (res) {
+    return (
+      <div className="stack" style={{ maxWidth: 820 }}>
+        <div className="card" style={{ textAlign: 'center' }}>
+          <h1>Revision complete</h1>
+          <div style={{ fontSize: '2.5rem', fontWeight: 800 }}>{res.correct}/{res.total}</div>
+          <p className="muted">Questions you answered correctly have been cleared from your missed list.</p>
+          <div className="row" style={{ justifyContent: 'center' }}><Link className="btn primary" to="/">Back to dashboard</Link></div>
+        </div>
+        {res.review.map((q: any) => (
+          <div className="card" key={q.id}>
+            <div className="small muted">{q.given === q.answer ? '✅ Cleared' : '❌ Still missed'}</div>
+            <div style={{ fontWeight: 700, margin: '6px 0' }}>{q.question}</div>
+            {q.options.map((o: string, k: number) => <div key={k} className={'opt ' + (k === q.answer ? 'right' : k === q.given ? 'bad' : '')} style={{ cursor: 'default' }}><b>{String.fromCharCode(65 + k)}.</b><span>{o}</span></div>)}
+            {q.explanation && <div style={{ marginTop: 12 }}><Markdown text={q.explanation} /></div>}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  const qs: any[] = r.data.questions || [];
+  return (
+    <div className="stack" style={{ maxWidth: 820 }}>
+      <h1>🔁 Missed questions revision ({qs.length})</h1>
+      {qs.map((q, idx) => (
+        <div className="card" key={q.id}>
+          <b>{idx + 1}. {q.question}</b>
+          {q.options.map((o: string, i: number) => (
+            <button key={i} className={'opt' + (ans[q.id] === i ? ' sel' : '')} onClick={() => setAns({ ...ans, [q.id]: i })}>
+              <b>{String.fromCharCode(65 + i)}.</b><span>{o}</span>
+            </button>
+          ))}
+        </div>
+      ))}
+      <div><button className="btn primary" onClick={async () => setRes(await api.post('/api/quizzes/revision/submit', { answers: ans }))}>Submit revision</button></div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ Investment Products FAQ */
+export function FaqPage() {
+  const r = useLoad(() => api.get('/api/faqs'));
+  const [cat, setCat] = useState('All');
+  const [q, setQ] = useState('');
+  const [openId, setOpenId] = useState<string | null>(null);
+  if (r.loading) return <Spinner />;
+  if (r.error) return <ErrorBox error={r.error} retry={r.reload} />;
+
+  const all: any[] = r.data.faqs || [];
+  const cats = ['All', ...Array.from(new Set(all.map((f) => f.category)))];
+  const list = all.filter((f) =>
+    (cat === 'All' || f.category === cat) &&
+    (!q.trim() || (f.question + f.answer + f.section).toLowerCase().includes(q.trim().toLowerCase())),
+  );
+
+  return (
+    <div className="stack" style={{ maxWidth: 960 }}>
+      <div>
+        <h1>Investment Products FAQ — Advisor Edition</h1>
+        <p className="muted" style={{ margin: 0 }}>Plain-language answers for Mutual Funds, Bonds, SIF, PMS, and Insurance (FY 2026-27 reference).</p>
+      </div>
+      <div className="row wrap">
+        {cats.map((c) => <button key={c} className={'chip' + (cat === c ? ' on' : '')} onClick={() => setCat(c)}>{c}</button>)}
+        <span className="grow" />
+        <input style={{ maxWidth: 280 }} placeholder="Search FAQs…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search FAQs" />
+      </div>
+      {!list.length && <div className="card muted">No FAQs match your filter.</div>}
+      {list.map((f) => {
+        const isOpen = openId === f.id || q.trim().length > 1;
+        return (
+          <div className="card" key={f.id} style={{ padding: '16px 20px' }}>
+            <div className="row between" style={{ cursor: 'pointer' }} onClick={() => setOpenId(isOpen ? null : f.id)}>
+              <div>
+                <div className="row wrap" style={{ gap: 6, marginBottom: 4 }}>
+                  <span className="badge">{f.category}</span>
+                  <span className="small muted">{f.section}</span>
+                </div>
+                <b style={{ fontSize: '1.02rem' }}>{f.question}</b>
+              </div>
+              <span className="btn sm ghost">{isOpen ? '−' : '+'}</span>
+            </div>
+            {isOpen && <div className="muted" style={{ marginTop: 12, lineHeight: 1.65 }}>{f.answer}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ "What Changed" Regulatory & Product Change Log */
+export function ChangelogPage() {
+  const r = useLoad(() => api.get('/api/changelog'));
+  const [cat, setCat] = useState('All');
+  if (r.loading) return <Spinner />;
+  if (r.error) return <ErrorBox error={r.error} retry={r.reload} />;
+  const items: any[] = r.data?.items || [];
+  const cats = ['All', ...Array.from(new Set(items.map((x) => x.category)))];
+  const filtered = items.filter((x) => cat === 'All' || x.category === cat);
+  return (
+    <div className="stack">
+      <div>
+        <h1 style={{ marginBottom: 4 }}>What Changed — Regulatory &amp; Product Log</h1>
+        <p className="muted" style={{ margin: 0 }}>Side-by-side "Old Rule vs. New Rule" reference for SEBI, AMFI, taxation, and product updates.</p>
+      </div>
+      <div className="row wrap">
+        {cats.map((c) => <button key={c} className={'chip' + (cat === c ? ' on' : '')} onClick={() => setCat(c)}>{c}</button>)}
+      </div>
+      {!filtered.length ? <div className="card muted">No updates published yet.</div> : filtered.map((it) => (
+        <div key={it.id} className="card stack" style={{ gap: 12 }}>
+          <div className="row between wrap">
+            <div className="row wrap" style={{ gap: 8 }}>
+              <span className="badge m">{it.category}</span>
+              <h2 style={{ margin: 0 }}>{it.title}</h2>
+            </div>
+            <span className="badge">Effective {fmtDate(it.effective_date)}</span>
+          </div>
+          <div className="grid g2">
+            <div className="inset" style={{ borderLeft: '4px solid var(--err)' }}>
+              <div className="small muted" style={{ fontWeight: 800 }}>OLD RULE</div>
+              <div className="small" style={{ marginTop: 6, lineHeight: 1.6 }}>{it.old_rule}</div>
+            </div>
+            <div className="inset" style={{ borderLeft: '4px solid var(--acc)' }}>
+              <div className="small muted" style={{ fontWeight: 800 }}>NEW RULE</div>
+              <div className="small" style={{ marginTop: 6, lineHeight: 1.6 }}>{it.new_rule}</div>
+            </div>
+          </div>
+          {it.impact && <div className="alert ok" style={{ margin: 0 }}><b>Advisor Action:</b> {it.impact}</div>}
+        </div>
+      ))}
+    </div>
   );
 }
 

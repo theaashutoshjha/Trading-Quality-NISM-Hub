@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "fundsindia-learning-hub",
   "main": "worker/index.ts",
@@ -28,5 +28,6 @@
     // Set to "0" only for local http development (see .dev.vars).
     "COOKIE_SECURE": "1"
   },
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  "triggers": { "crons": ["0 4 * * 1"] }
 }

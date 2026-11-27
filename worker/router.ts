@@ -1,11 +1,8 @@
-import { Ctx, Env, HttpError, fail, json, sessionUser } from './lib';
+import { Ctx, Env, HttpError, clientIp, fail, json, sessionUser } from './lib';
 
-export type Access = 'none' | 'learner' | 'admin' | 'admin-only';
+export type Access = 'none' | 'learner' | 'head' | 'admin' | 'admin-only';
 export type Handler = (c: Ctx) => Promise<Response> | Response;
 export type Route = [method: string, pattern: string, access: Access, handler: Handler];
-
-// While a password change is pending (first login or admin reset) nothing else may be used, whatever the browser UI does.
-const PASSWORD_CHANGE_OK = ['/api/auth/password', '/api/auth/me', '/api/auth/logout', '/api/admin/password', '/api/admin/me', '/api/admin/logout'];
 
 const compile = (p: string) => new RegExp('^' + p.replace(/:[a-zA-Z]+/g, '([^/]+)') + '/?$');
 
@@ -23,9 +20,6 @@ export function makeRouter(routes: Route[]) {
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         const origin = req.headers.get('Origin');
         if (origin && origin !== url.origin) fail(403, 'Cross-origin request blocked.');
-        // Browsers also say where a request comes from; anything not from this site itself is refused.
-        const site = req.headers.get('Sec-Fetch-Site');
-        if (site && site !== 'same-origin' && site !== 'none') fail(403, 'Cross-site request blocked.');
         const ct = req.headers.get('Content-Type') || '';
         if (!ct.startsWith('application/json')) fail(415, 'Expected JSON.');
       }
@@ -33,7 +27,7 @@ export function makeRouter(routes: Route[]) {
       let cache: any;
       const c: Ctx = {
         req, env, ex, url, params,
-        ip: req.headers.get('CF-Connecting-IP') || 'local',
+        ip: clientIp(req),
         body: async () => {
           if (cache) return cache;
           const text = await req.text();
@@ -48,11 +42,10 @@ export function makeRouter(routes: Route[]) {
         },
       };
       if (hit.a !== 'none') {
-        const kind = hit.a === 'learner' ? 'learner' : 'admin';
+        const kind = hit.a === 'learner' ? 'learner' : hit.a === 'head' ? 'head' : 'admin';
         const user = await sessionUser(env, req, kind);
         if (!user) fail(401, 'Please sign in.');
         if (hit.a === 'admin-only' && user!.role !== 'admin') fail(403, 'Administrator access required.');
-        if (user!.must_change && !PASSWORD_CHANGE_OK.includes(url.pathname.replace(/\/+$/, ''))) fail(403, 'Please set a new password before continuing.');
         c.user = user!;
       }
       return await hit.h(c);

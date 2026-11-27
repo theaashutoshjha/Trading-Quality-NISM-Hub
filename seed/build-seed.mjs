@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { COURSES, MAX_AGE_DAYS } from './catalog.mjs';
 import { buildAcademy } from './fi-academy.mjs';
-import { COMMON, PROCESS_COURSES, TEAM_ACCESS, TEAM_ACCESS_VERSION } from './teams.mjs';
+import { COMMON, PROCESS_COURSES, TEAM_ACCESS } from './teams.mjs';
 import { MF_MODULES } from './data/processDocs.mjs';
 import { EQUITY_PLACEHOLDER_MD, checklistMd, processMd, processOverviewMd } from './processMd.mjs';
 import { PATHS } from './paths.mjs';
@@ -394,17 +394,18 @@ for (const c of COURSES) {
 const dead = Object.entries(embedCache).filter(([, ok]) => ok === false).map(([id]) => id);
 for (let i = 0; i < dead.length; i += 50) stmts.push(`DELETE FROM lessons WHERE kind='video' AND video_id IN (${dead.slice(i, i + 50).map(q).join(',')});`);
 
-// ---------- default team access ----------
-// Applied once per TEAM_ACCESS_VERSION (bump it in seed/teams.mjs to roll out new defaults). Edits made afterwards in
-// Admin Portal -> Team access are never overwritten until the version changes again.
-const flag = `team_access_v${TEAM_ACCESS_VERSION}`;
-stmts.push(`DELETE FROM team_access WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key=${q(flag)});`);
+// ---------- default team access (applied once; later edits in the Admin Portal are never overwritten) ----------
 for (const [team, ids] of Object.entries(TEAM_ACCESS)) {
-  for (const id of [...new Set([...COMMON, ...PROCESS_COURSES, ...ids])]) {
-    stmts.push(`INSERT OR IGNORE INTO team_access (team,course_id) SELECT ${q(team)},${q(id)} WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key=${q(flag)}) AND EXISTS (SELECT 1 FROM courses WHERE id=${q(id)});`);
+  for (const id of [...new Set([...COMMON, ...ids])]) {
+    stmts.push(`INSERT OR IGNORE INTO team_access (team,course_id) SELECT ${q(team)},${q(id)} WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key='team_access_seeded') AND EXISTS (SELECT 1 FROM courses WHERE id=${q(id)});`);
   }
 }
-stmts.push(`INSERT OR IGNORE INTO settings (key,value) VALUES (${q(flag)},'1');`);
+stmts.push(`INSERT OR IGNORE INTO settings (key,value) VALUES ('team_access_seeded','1');`);
+// Process-document courses: every team can open them (once; admins can change it later in Team access).
+for (const team of Object.keys(TEAM_ACCESS)) for (const id of PROCESS_COURSES) {
+  stmts.push(`INSERT OR IGNORE INTO team_access (team,course_id) SELECT ${q(team)},${q(id)} WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key='team_access_process_seeded') AND EXISTS (SELECT 1 FROM courses WHERE id=${q(id)});`);
+}
+stmts.push(`INSERT OR IGNORE INTO settings (key,value) VALUES ('team_access_process_seeded','1');`);
 
 // ---------- news seed ----------
 const news = [

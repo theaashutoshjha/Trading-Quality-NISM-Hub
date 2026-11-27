@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev:web": "vite build -c vite.learner.config.ts --watch",
-    "build": "vite build -c vite.learner.config.ts && vite build -c vite.admin.config.ts",
+    "build": "vite build -c vite.learner.config.ts && vite build -c vite.head.config.ts && vite build -c vite.admin.config.ts",
     "seed:build": "node seed/build-seed.mjs",
     "db:migrate:local": "wrangler d1 migrations apply fundsindia-hub --local",
     "db:migrate:remote": "wrangler d1 migrations apply fundsindia-hub --remote",

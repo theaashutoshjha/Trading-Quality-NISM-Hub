@@ -92,9 +92,3 @@ Videos play in YouTube's embedded player on the lesson page, with YouTube's nati
 * Set a learner's User ID and team under **Users & access** (single add, edit, or bulk CSV: `email, full name, user id, department, team`). User IDs are unique (case-insensitive).
 * Existing learner accounts have no team after upgrading (`npm run db:migrate:remote` adds the column): assign teams before they sign in again. The admin portal sign-in is unchanged.
 * FundsIndia Academy now lists every video on the FundsIndia YouTube channel under headers that match the channel's own playlists (`seed/fi-academy.mjs`; refresh data with `seed/tools/fetch-fi.mjs` + `seed/tools/fetch-fi-playlists.mjs`). NISM VIII and X-A/X-B also include the N V Finance playlists.
-
-## Team focus, feedback and read-only content
-- Each team sees its own dashboard focus, sidebar order and course set (Customer Support has no sales content). Settings (profile, password, certificates) and Contact us live in the sidebar's "Me" section.
-- Content is read-only: there are no print / save-as-PDF controls and printing shows a notice instead.
-- Every lesson, document and course page has a feedback box (1–5 stars + comment). Contact us messages and feedback appear in the admin portal under "Feedback & messages" (filter, mark read/resolved, add a note; only admins can delete).
-- Hardening: server-enforced forced password change, throttled password changes, `__Host-` cookies, Sec-Fetch-Site + Origin + JSON checks on writes, 5-session cap, COOP/CORP/HSTS preload, workbooks served only to signed-in users with no-store.

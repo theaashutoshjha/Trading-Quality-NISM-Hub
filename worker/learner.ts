@@ -131,10 +131,22 @@ async function submitQuiz(c: Ctx) {
   const seconds = Math.max(0, Math.round((Date.now() - new Date(s.started_at + 'Z').getTime()) / 1000));
 
   const aid = newId(16);
-  await db.batch([
+  const statOps: D1PreparedStatement[] = [
     db.prepare(`UPDATE quiz_sessions SET submitted=1 WHERE id=?`).bind(s.id),
     db.prepare(`INSERT INTO attempts (id,user_id,quiz_id,course_id,correct,wrong,total,score,pct,passed,seconds) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(aid, uid, q.id, q.course_id, correct, wrong, total, score, pct, passed, seconds),
-  ]);
+  ];
+  for (const r of review as any[]) {
+    if (!r) continue;
+    statOps.push(
+      db.prepare(`INSERT INTO question_stats (question_id,total_tries,correct_tries) VALUES (?,1,?) ON CONFLICT(question_id) DO UPDATE SET total_tries=total_tries+1, correct_tries=correct_tries+?`).bind(r.id, r.given === r.answer ? 1 : 0, r.given === r.answer ? 1 : 0),
+    );
+    if (r.given === r.answer) {
+      statOps.push(db.prepare(`DELETE FROM wrong_questions WHERE user_id=? AND question_id=?`).bind(uid, r.id));
+    } else if (r.given >= 0) {
+      statOps.push(db.prepare(`INSERT INTO wrong_questions (user_id,question_id,quiz_id,updated_at) VALUES (?,?,?,datetime('now')) ON CONFLICT(user_id,question_id) DO UPDATE SET updated_at=datetime('now')`).bind(uid, r.id, q.id));
+    }
+  }
+  await db.batch(statOps);
 
   let certificate: string | null = null;
   if (passed && q.is_exam) {
@@ -224,6 +236,37 @@ export const learnerRoutes: Route[] = [
     }
     return json({ ok: true, completed });
   }],
+  ['POST', '/api/quizzes/revision/start', 'learner', async (c) => {
+    const rows = await c.env.DB.prepare(
+      `SELECT q.id,q.question,q.options FROM wrong_questions w JOIN questions q ON q.id=w.question_id WHERE w.user_id=? ORDER BY w.updated_at DESC LIMIT 25`,
+    ).bind(c.user!.id).all<any>();
+    if (!rows.results.length) fail(404, 'No missed questions to revise yet!');
+    return json({
+      questions: rows.results.map((p) => ({ id: p.id, question: p.question, options: JSON.parse(p.options) })),
+    });
+  }],
+  ['POST', '/api/quizzes/revision/submit', 'learner', async (c) => {
+    const b = await c.body();
+    const answers: Record<string, number> = typeof b.answers === 'object' && b.answers ? b.answers : {};
+    const ids = Object.keys(answers).slice(0, 50);
+    if (!ids.length) fail(400, 'No answers submitted.');
+    const qs = await c.env.DB.prepare(`SELECT id,question,options,answer,explanation FROM questions WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all<any>();
+    const byId = new Map(qs.results.map((x) => [x.id, x]));
+    let correct = 0;
+    const ops: D1PreparedStatement[] = [];
+    const review = ids.map((id) => {
+      const x = byId.get(id);
+      if (!x) return null;
+      const given = Number.isInteger(answers[id]) ? answers[id] : -1;
+      if (given === x.answer) {
+        correct++;
+        ops.push(c.env.DB.prepare(`DELETE FROM wrong_questions WHERE user_id=? AND question_id=?`).bind(c.user!.id, id));
+      }
+      return { id, question: x.question, options: JSON.parse(x.options), answer: x.answer, given, explanation: x.explanation };
+    }).filter(Boolean);
+    if (ops.length) await c.env.DB.batch(ops);
+    return json({ correct, total: review.length, review });
+  }],
   ['POST', '/api/quizzes/:id/start', 'learner', startQuiz],
   ['POST', '/api/quizzes/:id/submit', 'learner', submitQuiz],
   ['GET', '/api/paths', 'learner', pathList],
@@ -259,6 +302,10 @@ export const learnerRoutes: Route[] = [
       ).bind(...oL.args, uid, ...oL.args, ...oL.args, uid).all<any>(),
     ]);
     const myPaths = paths.results.filter((p: any) => p.total > 0);
+    const [assignments, missed] = await Promise.all([
+      db.prepare(`SELECT id,target_kind,target_id,title,due_date FROM assignments WHERE (user_id=? OR team=?) ORDER BY due_date ASC LIMIT 20`).bind(uid, c.user!.team || '').all(),
+      db.prepare(`SELECT COUNT(*) n FROM wrong_questions WHERE user_id=?`).bind(uid).first<{ n: number }>(),
+    ]);
     return json({
       stats: { ...(stats as object), streak: streakOf(days.results.map((x) => x.d)) },
       watching: watching.results,
@@ -266,6 +313,8 @@ export const learnerRoutes: Route[] = [
       started: started.results,
       attempts: attempts.results,
       certificates: certs.results,
+      assignments: assignments.results,
+      missedCount: missed?.n || 0,
       paths: {
         active: myPaths.filter((p: any) => p.done > 0 && p.done < p.total),
         suggested: myPaths.filter((p: any) => p.done === 0).slice(0, 3),
@@ -277,6 +326,10 @@ export const learnerRoutes: Route[] = [
   ['GET', '/api/news', 'learner', async (c) => {
     const r = await c.env.DB.prepare(`SELECT id,title,body,category,url,pinned,published_at FROM news WHERE published=1 ORDER BY pinned DESC, published_at DESC LIMIT 100`).all();
     return json({ news: r.results });
+  }],
+  ['GET', '/api/faqs', 'learner', async (c) => {
+    const r = await c.env.DB.prepare(`SELECT id,category,section,question,answer,sort FROM faqs ORDER BY sort, id`).all();
+    return json({ faqs: r.results });
   }],
   ['GET', '/api/feeds', 'learner', async (c) => json({ items: await loadFeeds(c.ex) })],
 
@@ -294,10 +347,15 @@ export const learnerRoutes: Route[] = [
   }],
 
   ['GET', '/api/certificates', 'learner', async (c) => {
-    const r = await c.env.DB.prepare(
-      `SELECT ce.id,ce.pct,ce.issued_at,c.title,c.code FROM certificates ce JOIN courses c ON c.id=ce.course_id WHERE ce.user_id=? AND ce.revoked=0 ORDER BY ce.issued_at DESC`,
-    ).bind(c.user!.id).all();
-    return json({ certificates: r.results, holder: c.user!.name });
+    const [r, br] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT ce.id,ce.pct,ce.issued_at,c.title,c.code FROM certificates ce JOIN courses c ON c.id=ce.course_id WHERE ce.user_id=? AND ce.revoked=0 ORDER BY ce.issued_at DESC`,
+      ).bind(c.user!.id).all(),
+      c.env.DB.prepare(`SELECT value FROM system_settings WHERE key='cert_branding'`).first<{ value: string }>(),
+    ]);
+    let branding = null;
+    if (br?.value) { try { branding = JSON.parse(br.value); } catch {} }
+    return json({ certificates: r.results, holder: c.user!.name, branding });
   }],
   ['GET', '/api/attempts', 'learner', async (c) => {
     const r = await c.env.DB.prepare(
@@ -314,5 +372,78 @@ export const learnerRoutes: Route[] = [
     ).bind(c.params[0].toUpperCase().slice(0, 20)).first<any>();
     if (!r) return json({ valid: false });
     return json({ valid: !r.revoked, name: r.name, course: r.title, code: r.code, issued: r.issued_at, pct: r.pct });
+  }],
+
+  // Learner feedback (lesson/contact)
+  ['POST', '/api/feedback', 'learner', async (c) => {
+    const b = await c.body();
+    const kind = b.kind === 'contact' ? 'contact' : 'feedback';
+    const message = str(b.message, 4000);
+    if (message.length < 3) fail(400, 'Please enter a message (at least 3 characters).');
+    const subject = str(b.subject, 160) || null;
+    if (kind === 'contact' && !subject) fail(400, 'Please enter a subject.');
+    const ratingRaw = b.rating === undefined || b.rating === null || b.rating === '' ? null : int(b.rating, 0);
+    const rating = ratingRaw && ratingRaw >= 1 && ratingRaw <= 5 ? ratingRaw : null;
+    const page = str(b.page, 200) || null;
+    const u = c.user!;
+    const id = newId(12);
+    await c.env.DB.prepare(
+      `INSERT INTO feedback (id,kind,user_id,user_name,user_email,user_team,page,rating,subject,message) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    ).bind(id, kind, u.id, u.name, u.email, u.team, page, rating, subject, message).run();
+    return json({ ok: true, id });
+  }],
+
+  // Bookmarks & private study notes
+  ['GET', '/api/bookmarks', 'learner', async (c) => {
+    const r = await c.env.DB.prepare(
+      `SELECT b.lesson_id,b.note,b.updated_at,l.title,l.kind,co.title AS course FROM bookmarks b JOIN lessons l ON l.id=b.lesson_id JOIN courses co ON co.id=l.course_id WHERE b.user_id=? ORDER BY b.updated_at DESC`,
+    ).bind(c.user!.id).all();
+    return json({ bookmarks: r.results });
+  }],
+  ['GET', '/api/bookmarks/:id', 'learner', async (c) => {
+    const r = await c.env.DB.prepare(`SELECT lesson_id,note,updated_at FROM bookmarks WHERE user_id=? AND lesson_id=?`).bind(c.user!.id, c.params[0]).first();
+    return json({ bookmark: r || null });
+  }],
+  ['POST', '/api/bookmarks/:id', 'learner', async (c) => {
+    const b = await c.body();
+    const note = str(b.note, 10000);
+    await c.env.DB.prepare(
+      `INSERT INTO bookmarks (user_id,lesson_id,note,updated_at) VALUES (?,?,?,datetime('now')) ON CONFLICT(user_id,lesson_id) DO UPDATE SET note=excluded.note, updated_at=datetime('now')`,
+    ).bind(c.user!.id, c.params[0], note).run();
+    return json({ ok: true });
+  }],
+  ['DELETE', '/api/bookmarks/:id', 'learner', async (c) => {
+    await c.env.DB.prepare(`DELETE FROM bookmarks WHERE user_id=? AND lesson_id=?`).bind(c.user!.id, c.params[0]).run();
+    return json({ ok: true });
+  }],
+
+  // Notifications (team, user-specific, or broadcast '__ALL__')
+  ['GET', '/api/notifications', 'learner', async (c) => {
+    const r = await c.env.DB.prepare(
+      `SELECT id,title,body,link,is_read,created_at FROM notifications WHERE user_id=? OR team=? OR team='__ALL__' ORDER BY created_at DESC LIMIT 30`,
+    ).bind(c.user!.id, c.user!.team || '').all();
+    return json({ notifications: r.results });
+  }],
+  ['POST', '/api/notifications/read', 'learner', async (c) => {
+    await c.env.DB.prepare(`UPDATE notifications SET is_read=1 WHERE user_id=? OR team=? OR team='__ALL__'`).bind(c.user!.id, c.user!.team || '').run();
+    return json({ ok: true });
+  }],
+
+  // Active announcement / maintenance banner (accessible to Learner & Head portals)
+  ['GET', '/api/banner', 'none', async (c) => {
+    const row = await c.env.DB.prepare(`SELECT value FROM system_settings WHERE key='banner'`).first<{ value: string }>();
+    if (!row?.value) return json({ banner: null });
+    try {
+      const b = JSON.parse(row.value);
+      if (!b?.active || !b?.message) return json({ banner: null });
+      if (b.expiresAt && b.expiresAt < new Date().toISOString().slice(0, 10)) return json({ banner: null });
+      return json({ banner: b });
+    } catch { return json({ banner: null }); }
+  }],
+
+  // "What Changed" Regulatory & Product Change Log
+  ['GET', '/api/changelog', 'learner', async (c) => {
+    const r = await c.env.DB.prepare(`SELECT id,category,title,effective_date,old_rule,new_rule,impact FROM regulatory_changes WHERE published=1 ORDER BY effective_date DESC, created_at DESC`).all();
+    return json({ items: r.results });
   }],
 ];

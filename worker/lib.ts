@@ -15,10 +15,11 @@ export interface User {
   emp_id: string | null;
   department: string | null;
   team: string | null;
-  role: 'learner' | 'trainer' | 'admin';
+  role: 'learner' | 'head' | 'trainer' | 'admin';
   status: string;
   must_change: number;
   totp_enabled: number;
+  login_count?: number;
 }
 
 export interface Ctx {
@@ -45,14 +46,9 @@ export const fail = (status: number, message: string): never => {
   throw new HttpError(status, message);
 };
 
-export const COOKIE = { learner: 'fi_l', admin: 'fi_a' } as const;
+export const COOKIE = { learner: 'fi_l', head: 'fi_h', admin: 'fi_a' } as const;
 export type Kind = keyof typeof COOKIE;
-// Learner sessions last one working day, staff sessions one shift.
-const TTL_HOURS: Record<Kind, number> = { learner: 24, admin: 8 };
-const MAX_SESSIONS = 5; // per user and portal; the oldest are signed out
-/** Over HTTPS the cookie uses the __Host- prefix: the browser then refuses it unless it is Secure, Path=/ and has no Domain,
- *  which stops a sibling sub-domain from planting or overwriting it. Plain-http local development keeps the short name. */
-export const cookieName = (env: Env, kind: Kind) => (env.COOKIE_SECURE === '0' ? '' : '__Host-') + COOKIE[kind];
+const TTL_HOURS: Record<Kind, number> = { learner: 24 * 7, head: 12, admin: 8 };
 
 export function readCookie(req: Request, name: string) {
   const raw = req.headers.get('Cookie') || '';
@@ -66,7 +62,17 @@ export function readCookie(req: Request, name: string) {
 export function cookieHeader(env: Env, kind: Kind, value: string, clear = false) {
   const maxAge = clear ? 0 : TTL_HOURS[kind] * 3600;
   const secure = env.COOKIE_SECURE === '0' ? '' : '; Secure';
-  return `${cookieName(env, kind)}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure}`;
+  return `${COOKIE[kind]}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure}`;
+}
+
+export function clientIp(req: Request): string {
+  return (
+    req.headers.get('CF-Connecting-IP') ||
+    req.headers.get('True-Client-IP') ||
+    req.headers.get('X-Real-IP') ||
+    (req.headers.get('X-Forwarded-For') || '').split(',')[0].trim() ||
+    '127.0.0.1'
+  ).slice(0, 64);
 }
 
 export async function createSession(env: Env, req: Request, userId: string, kind: Kind) {
@@ -76,32 +82,32 @@ export async function createSession(env: Env, req: Request, userId: string, kind
   await env.DB.prepare(
     `INSERT INTO sessions (token_hash, user_id, kind, expires_at, ip, ua) VALUES (?,?,?,?,?,?)`,
   )
-    .bind(hash, userId, kind, expires, req.headers.get('CF-Connecting-IP') || '', (req.headers.get('User-Agent') || '').slice(0, 200))
+    .bind(hash, userId, kind, expires, clientIp(req), (req.headers.get('User-Agent') || '').slice(0, 200))
     .run();
-  // opportunistic cleanup: expired sessions, and anything beyond the newest MAX_SESSIONS for this user
+  // opportunistic cleanup
   await env.DB.prepare(`DELETE FROM sessions WHERE expires_at < ?`).bind(new Date().toISOString()).run();
-  await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? AND kind = ? AND token_hash NOT IN (SELECT token_hash FROM sessions WHERE user_id = ? AND kind = ? ORDER BY created_at DESC, rowid DESC LIMIT ${MAX_SESSIONS})`).bind(userId, kind, userId, kind).run();
   return token;
 }
 
 export async function sessionUser(env: Env, req: Request, kind: Kind): Promise<User | null> {
-  const token = readCookie(req, cookieName(env, kind));
+  const token = readCookie(req, COOKIE[kind]);
   if (!token || token.length < 30) return null;
   const hash = await sha256Hex(token);
   const row = await env.DB.prepare(
-    `SELECT u.id,u.email,u.name,u.emp_id,u.department,u.team,u.role,u.status,u.must_change,u.totp_enabled
+    `SELECT u.id,u.email,u.name,u.emp_id,u.department,u.team,u.role,u.status,u.must_change,u.totp_enabled,u.login_count
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND s.kind = ? AND s.expires_at > ? AND u.status = 'active'`,
   )
     .bind(hash, kind, new Date().toISOString())
     .first<User>();
   if (!row) return null;
-  if (kind === 'admin' && row.role === 'learner') return null;
+  if (kind === 'admin' && row.role !== 'admin' && row.role !== 'trainer') return null;
+  if (kind === 'head' && row.role !== 'head' && row.role !== 'admin') return null;
   return row;
 }
 
 export async function destroySession(env: Env, req: Request, kind: Kind) {
-  const token = readCookie(req, cookieName(env, kind));
+  const token = readCookie(req, COOKIE[kind]);
   if (token) await env.DB.prepare(`DELETE FROM sessions WHERE token_hash = ?`).bind(await sha256Hex(token)).run();
 }
 
