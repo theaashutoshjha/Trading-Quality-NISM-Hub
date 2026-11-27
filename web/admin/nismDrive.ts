@@ -962,18 +962,17 @@ export function parseNismCertificateText(rawText: string, fileName: string): Omi
   const lineText = normalizeOcrText(rawText);
   const clean = lineText.replace(/\s+/g, ' ').trim();
 
-  // Certificate number
+  // Certificate / Registration number
   const certNum = (
     clean.match(/\b(NISM[-\s]*\d{8,14})\b/i)?.[1]?.replace(/\s+/g, '') ||
-    clean.match(/(?:Certificate|Cert\.?)\s*(?:No|Number)\.?\s*[:\-]?\s*([A-Z0-9-]{6,25})/i)?.[1] ||
+    clean.match(/(?:Certificate|Cert\.?|Registration)\s*(?:No|Number)\.?\s*[:\-]?\s*([A-Z0-9-]{6,25})/i)?.[1] ||
     ''
   ).toUpperCase();
 
-  // Enrolment / Registration number
-  const enrol = (
-    clean.match(/(?:Enrol+ment|Registration|Reg\.?)\s*(?:No|Number)\.?\s*[:\-]?\s*([A-Z0-9-]{5,18})/i)?.[1] ||
-    ''
-  ).toUpperCase();
+  // Enrolment number (prefer explicit Enrolment No; only fall back to Reg No if distinct from certNum)
+  const enrolExplicit = clean.match(/Enrol+ment\s*(?:No|Number)\.?\s*[:\-]?\s*([A-Z0-9-]{5,18})/i)?.[1] || '';
+  const enrolFallback = clean.match(/(?:Registration|Reg\.?)\s*(?:No|Number)\.?\s*[:\-]?\s*([A-Z0-9-]{5,18})/i)?.[1] || '';
+  const enrol = (enrolExplicit || (enrolFallback.toUpperCase() !== certNum ? enrolFallback : '')).toUpperCase();
 
   // NISM Series
   const seriesMatch =
@@ -998,9 +997,10 @@ export function parseNismCertificateText(rawText: string, fileName: string): Omi
   // Holder Name
   let holderName = '';
   const namePatterns = [
-    /This\s+is\s+to\s+certify\s+that\s+(?:Mr\.?|Ms\.?|Mrs\.?|Shri\.?|Smt\.?|Dr\.?)?\s*([A-Za-z][A-Za-z\s.]{2,60}?)(?=\s*(?:\(|has|bearing|having|Enrol|Registration|PAN|S\/O|D\/O|W\/O|NISM|successfully|cleared|passed|completed))/i,
-    /(?:Candidate\s*Name|Name\s*of\s*(?:the\s*)?(?:Candidate|Participant|Holder|Examinee))\s*[:\-]?\s*(?:Mr\.?|Ms\.?|Mrs\.?|Shri\.?)?\s*([A-Za-z][A-Za-z\s.]{2,60}?)(?=\s*(?:\n|\(|Enrol|Reg|Certificate|NISM|Date|Marks|PAN|Father))/i,
-    /(?:Awarded\s+to|Presented\s+to)\s+(?:Mr\.?|Ms\.?|Mrs\.?)?\s*([A-Za-z][A-Za-z\s.]{2,60}?)(?=\s*(?:\n|has|for|NISM|Certificate))/i,
+    /This\s+is\s+to\s+certify\s+that\s+(?:Mr\.?\s*\/\s*Ms\.?|Mr\.?|Ms\.?|Mrs\.?|Shri\.?|Smt\.?|Dr\.?)?\s*([A-Za-z][A-Za-z\s.]{2,60}?)(?=\s*(?:\(|has|bearing|having|Enrol|Registration|PAN|S\/O|D\/O|W\/O|NISM|successfully|cleared|passed|completed))/i,
+    /(?:Candidate\s*Name|Name\s*of\s*(?:the\s*)?(?:Candidate|Participant|Holder|Examinee))\s*[:\-]?\s*(?:Mr\.?\s*\/\s*Ms\.?|Mr\.?|Ms\.?|Mrs\.?|Shri\.?)?\s*([A-Za-z][A-Za-z\s.]{2,60}?)(?=\s*(?:\n|\(|Enrol|Reg|Certificate|NISM|Date|Marks|PAN|Father))/i,
+    /(?:Awarded\s+to|Presented\s+to)\s+(?:Mr\.?\s*\/\s*Ms\.?|Mr\.?|Ms\.?|Mrs\.?)?\s*([A-Za-z][A-Za-z\s.]{2,60}?)(?=\s*(?:\n|has|for|NISM|Certificate))/i,
+    /(?:Mr\.?\s*\/\s*Ms\.?|Mrs\.?|Mr\.?|Ms\.?|Shri\.?|Smt\.?)\s+([A-Z][A-Za-z\s.]{2,60}?)(?=\s*(?:\n|\(|PAN|Registration|Enrol|has\s+successfully|has\s+passed|bearing))/i,
   ];
   for (const re of namePatterns) {
     const m = lineText.match(re) || clean.match(re);
@@ -1021,8 +1021,14 @@ export function parseNismCertificateText(rawText: string, fileName: string): Omi
   const monPat = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
   const dateTok = `(?:\\d{1,2}(?:st|nd|rd|th)?[\\s\\-\\/.,]+${monPat}[.,]?[\\s\\-\\/.,]+\\d{2,4}|${monPat}[.,]?[\\s\\-\\/.]+\\d{1,2}(?:st|nd|rd|th)?[.,]?[\\s\\-\\/.,]+\\d{2,4}|\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{2,4}|\\d{4}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{1,2})`;
 
+  // Official bilingual NISM certificate table row: "<Test Date> <Test Centre> <Language> <Marks> <PASS|FAIL>"
+  const tableRowM = lineText.match(
+    new RegExp(`(${dateTok})\\s+[^\\n]{2,70}?\\s+(?:English|Hindi|Gujarati|Marathi|Tamil|Telugu|Kannada|Malayalam|Bengali|Punjabi|Odia)\\s+(\\d{1,3}(?:\\.\\d{1,2})?)\\s+(PASS|FAIL)\\b`, 'i'),
+  );
+
   const validRangeM = clean.match(new RegExp(`(?:Valid\\s+from|Validity\\s*(?:Period)?\\s*[:\\-]?)\\s*(${dateTok})\\s*(?:to|till|until|\\-)\\s*(${dateTok})`, 'i'));
   const examRaw =
+    tableRowM?.[1] ||
     validRangeM?.[1] ||
     clean.match(new RegExp(`(?:Test\\s*Date|Exam(?:ination)?\\s*Date|Date\\s+of\\s+(?:Exam(?:ination)?|Test|Passing|Issue|Completion)|CPE\\s*(?:Program\\s*)?Date|Issue\\s*Date|Program\\s*Date)\\s*[:\\-;]?\\s*(${dateTok})`, 'i'))?.[1] ||
     clean.match(new RegExp(`(?:held|conducted|passed|completed|issued|dated)\\s+on\\s*(${dateTok})`, 'i'))?.[1] ||
@@ -1035,12 +1041,12 @@ export function parseNismCertificateText(rawText: string, fileName: string): Omi
   let expiryDate = parseDateIso(expRaw);
   let expiryInferred = false;
 
-  // Multi-line table header fallback (PDF tables often emit headers on line N and dates on line N+1 or N+2)
+  // Multi-line table header fallback (bilingual PDF tables can have 6–12 header lines before the values row)
   if (!examDate || !expiryDate) {
     const lines = lineText.split('\n').map((l) => l.trim()).filter(Boolean);
     for (let li = 0; li < lines.length; li++) {
       const hdr = lines[li];
-      const lookahead = [lines[li + 1] || '', lines[li + 2] || ''].join(' ');
+      const lookahead = lines.slice(li + 1, li + 14).join(' ');
       if (!examDate && /(?:Test\s*Date|Exam(?:ination)?\s*Date|Date\s+of\s+(?:Exam|Test|Passing|Issue))/i.test(hdr)) {
         const d = (lookahead.match(new RegExp(dateTok, 'gi')) || []).map(parseDateIso).find(Boolean);
         if (d) examDate = d;
@@ -1076,12 +1082,21 @@ export function parseNismCertificateText(rawText: string, fileName: string): Omi
     marksObtained = Number(scoreM[1]);
     totalMarks = Number(scoreM[2]) || 100;
     percentage = totalMarks > 0 ? Math.round((marksObtained / totalMarks) * 10000) / 100 : 0;
+  } else if (tableRowM?.[2]) {
+    marksObtained = Number(tableRowM[2]);
+    totalMarks = marksObtained > 100 ? 150 : 100;
+    percentage = totalMarks > 0 ? Math.round((marksObtained / totalMarks) * 10000) / 100 : 0;
   } else {
     const obtM = clean.match(/(?:Marks\s*(?:Obtained|Scored)|Scored)\s*[:\-]?\s*(\d+(?:\.\d+)?)\b/i);
     const maxM = clean.match(/(?:Maximum\s*Marks|Max\.?\s*Marks|Out\s+of)\s*[:\-]?\s*(\d+(?:\.\d+)?)\b/i);
+    const marksBeforePass = /\bMarks\b/i.test(clean) ? clean.match(/\b(\d{1,3}(?:\.\d{1,2})?)\s+(?:PASS|FAIL)\b/i) : null;
     if (obtM) {
       marksObtained = Number(obtM[1]);
       totalMarks = maxM ? Number(maxM[1]) || 100 : 100;
+      percentage = totalMarks > 0 ? Math.round((marksObtained / totalMarks) * 10000) / 100 : 0;
+    } else if (marksBeforePass) {
+      marksObtained = Number(marksBeforePass[1]);
+      totalMarks = marksObtained > 100 ? 150 : 100;
       percentage = totalMarks > 0 ? Math.round((marksObtained / totalMarks) * 10000) / 100 : 0;
     } else {
       const pctM =
